@@ -331,3 +331,222 @@ Key decisions:
 
 Verified the installed APIs before writing (pydantic-ai 1.104 deps/tools/BinaryContent; PTB 22.8
 Application/handlers/webhook) rather than trusting memory. ruff + pyright clean; 9 offline tests.
+
+## 2026-06-20 11:00 — Started The True-Crime Detective; defined the project
+
+**What we're building:** A single-player detective game backed by real historical court records,
+delivered as a Telegram bot. The player investigates genuine cases — Old Bailey, Victorian era —
+examines evidence, questions the record in natural language, makes a formal accusation, and learns
+what actually happened. The tagline: *Causae verae ex archivo* — real causes from the archive.
+
+**Why this project:** Historical court transcripts are extraordinary primary sources — vivid, factual,
+often shocking — but the reading experience kills the drama. A 200-page Old Bailey transcript dumps
+you into dense 19th-century legalese with no guide, no structure, no game. The AI doesn't add
+invention; it adds mediation. It turns an archive into an investigation.
+
+**The unique constraint that shapes everything:** This is not a fictional mystery. The facts must be
+real. A confident hallucination doesn't just break the game — it's a lie. This makes grounding the
+single most important engineering challenge, not an afterthought.
+
+**Case source chosen:** Old Bailey Online (oldbaileyonline.org). It covers London criminal courts
+1674–1913 and has a proper API. Victorian-era cases (1800–1913) are the sweet spot: richest
+transcripts, most familiar cultural setting, still public domain. Will start with 5–10 hand-picked
+cases — murder, poisoning, forgery — before considering other sources (CourtListener for US federal
+cases, historical newspapers) as a later extension.
+
+## 2026-06-20 11:30 — Chose Telegram bot as the interface
+
+**Decision:** Telegram bot. The other options were a web app and a CLI.
+
+**Why Telegram:** Investigation naturally benefits from async — you examine the evidence, think, come
+back. Telegram supports that; a web page implies you'll sit there. We also already have Telegram
+infrastructure patterns in this repo (protein bot, inspiration_bot), so the deployment path is known.
+
+**Why not web:** The "case file desk" aesthetic would be compelling, but the layout benefit doesn't
+outweigh the extra complexity right now. Web is the obvious next step if the Telegram version works
+and feels cramped. We want one complete path end-to-end first.
+
+**Why not CLI:** Fast to build but dead-ends immediately — no push delivery, no async, no deployment.
+
+## 2026-06-20 12:00 — Decided on pre-ingest as the data strategy
+
+**Decision:** Pre-ingest. We curate cases by hand, transform each into structured data (brief, cast,
+evidence list, verdict, chunked + embedded transcript), and store everything in Neon. Gameplay runs
+entirely from the local database — no live API dependency during play.
+
+**The two paths considered:**
+- *Pre-ingest:* Smaller pool, upfront curation work, but reliable, consistent quality, fast gameplay.
+  Adding a case = running the curator script once.
+- *Live retrieval:* Query the Old Bailey API in real-time, transform on the fly. Unlimited pool, but
+  more complexity, latency risk, variable case quality, and live API dependency during play.
+
+**Why pre-ingest wins now:** We need one complete, trustworthy path end-to-end. The fun isn't in the
+volume of cases; it's in the quality of one well-curated investigation. Live retrieval is a later
+extension (Stage 2 of the data strategy), not a day-one requirement. We'll note this clearly in the
+architecture so it doesn't feel like a permanent limitation.
+
+**Case pipeline (what pre-ingest means in practice):**
+1. Curator runs a script: fetch raw XML transcript from Old Bailey Online API
+2. LLM extracts structured data: case brief (3–4 sentences), cast of characters, evidence list with
+   labels and summaries, real verdict text
+3. Full transcript is chunked (~500 tokens per chunk, with overlap)
+4. Each chunk is embedded (1024-dim via embed() from llm.py) and stored in pgvector
+5. All of it goes into Neon: `detective_cases` + `detective_chunks` tables
+6. Script refuses to add a case without a verdict on record (hard gate)
+
+## 2026-06-20 12:30 — Designed the grounding approach
+
+**The problem:** The LLM game master must never invent facts about the case. Famous Victorian
+murders are well-known to LLMs from training data — if we're not careful, the model will answer
+from memory instead of the record and might even be right, but the *game* demands it answer from
+the *record*. We can't verify memory vs. record at runtime.
+
+**The solution — strict RAG:**
+- Every player query (free-form question or evidence examination) triggers a cosine similarity
+  search over the embedded transcript chunks
+- Top-5 chunks are retrieved and passed to the game master LLM as its sole context
+- System prompt is explicit: "Answer ONLY from the passages below. Never use training knowledge
+  about this case. If the answer is not in these passages, say: 'The record is silent on that.'"
+- The LLM is instructed to quote the record directly rather than paraphrase
+
+**The "record is silent on that" rule is a feature, not a bug.** Real archives have gaps. A player
+asking "what was the defendant's childhood like?" getting "the record is silent on that" is accurate,
+honest, and teaches something real about historical evidence.
+
+**What can go wrong with retrieval:** Embedding-based retrieval can miss a relevant chunk if the
+player's phrasing doesn't match the transcript's phrasing (a Victorian witness says "the prisoner
+proceeded to" while the player asks "did he walk to"). Mitigation: top-k = 5, not 1; and the system
+prompt asks the LLM to say "I can't find that in the record — try asking differently?" rather than
+silently wrong.
+
+## 2026-06-20 13:00 — Designed the game loop, scoring, and inactivity mechanics
+
+**Game loop:**
+1. New case is pushed to the player (cron or after closing the previous case)
+2. Player examines evidence items by number or name, asks free-form questions
+3. When ready: /accuse → state a name and verdict (Guilty / Not Guilty)
+4. Reveal: real verdict + explanation, score, next case offered
+5. Player can /close at any time to see the verdict without accusing (no score)
+
+**Scoring:** Three levels — the reveal always shows the real verdict regardless of score.
+- ✅ Correct: name matches accused AND verdict matches real verdict
+- ⚠️ Wrong verdict: name matches but verdict is wrong (e.g. player said Guilty but real verdict Not Guilty)
+- ❌ Wrong person: name doesn't match (or player accused the victim)
+
+**Why wrong verdict is a separate tier:** Some of the most interesting Old Bailey cases are acquittals
+that shocked contemporaries (Adelaide Bartlett, 1886). A player who identified the right person but
+guessed Guilty deserves to know they read the evidence correctly even if they misjudged the jury.
+
+**Inactivity nudge:**
+- Cron checks sessions inactive for >24 hours
+- Sends a hint drawn from a transcript chunk related to key unexamined evidence
+- Maximum 3 hints per case — after the third, offers /close
+- Hints never name the culprit; they point to evidence and let the player draw conclusions
+
+**Commands designed:** /examine N, /ask (or just type), /accuse, /hint, /close, /record, /newcase
+
+## 2026-06-20 13:30 — Completed stages 1–4 docs
+
+**Files written (all replacing protein-bot content):**
+
+- `docs/problem.md` — the archive access problem; why grounding is the central challenge
+- `docs/user_stories.md` — 14 stories: 9 for the core loop, 3 for player record/meta,
+  2 for curator tooling. Out of scope noted: multiplayer, other sources (for now), voice
+- `docs/failure_modes.md` — 13 failure modes. Most important: LLM hallucination (RAG solution);
+  player asking for verdict early (in-character refusal); ambiguous real verdicts (this is a feature);
+  prompt injection attempts ("ignore previous instructions" → treated as an in-game question)
+- `docs/scenarios.md` — 8 walkthroughs using real cases: Franz Müller (1864) and Adelaide
+  Bartlett (1886). Covers happy paths (new case, examine evidence, free-form Q&A, accusation,
+  hint) and edge cases (question with no answer, asking for verdict early, wrong-person accusation,
+  all cases completed)
+- `docs/policy.md` — 7 flows (case delivery, examine, free-form Q, hint, accusation, close, record);
+  tools table; tone rules (formal, measured, Victorian register); 6 hard rules
+- `README.md` — "Your project" section now describes The True-Crime Detective
+
+**Tone decision recorded in policy:** The game master speaks in a formal, measured, evocative
+register — "the record shows", "the testimony of X states". Never chatty, never preachy, never
+moral commentary on the era's justice system unless the player explicitly asks. Quotes over
+summaries: when a passage answers the question, reproduce it rather than paraphrase it.
+
+**Next:** `docs/architecture.md` (stage 5) — modules, DB schema, data flow diagrams. Then code.
+
+## 2026-06-20 14:00 — Built architecture (stage 5): docs, migrations, all 11 modules
+
+**Architecture doc written** (`docs/architecture.md`): module table, full DB schema (4 tables),
+3 data flow diagrams (question, accusation, ingest), key technical decisions explained.
+
+**4 migrations written** (migrations/005–008):
+- `005_detective_cases.sql` — case metadata, cast_json, evidence_json, verdict, brief
+- `006_detective_chunks.sql` — pgvector chunks with HNSW index (better than IVFFlat at small scale)
+- `007_detective_sessions.sql` — per-player-per-case state; pending_accusation flag in DB (survives restarts)
+- `008_detective_players.sql` — lifetime detective record
+
+**11 modules written** (`src/agent/agents/detective/`):
+- `models.py` — Pydantic types: Verdict, Score, SessionStatus, CaseRecord, Session, etc.
+- `case_store.py` — get_next_case (excludes played cases), get_case, get_evidence_item (by index or label)
+- `chunk_store.py` — store_chunks (bulk insert, idempotent), search_chunks (pgvector cosine)
+- `session_store.py` — full lifecycle: open, examine, hint, accuse, close, stale detection
+- `player_store.py` — upsert on every touch; record_outcome increments the right counter by name
+- `game_master.py` — pydantic-ai Agent (smart tier); chunks passed in message, not as deps
+- `accusation_extractor.py` — fast-tier Agent with AccusationExtract output type
+- `scorer.py` — pure function: exact match, substring, last-name, then difflib fuzzy (ratio > 0.75)
+- `curator.py` — CLI: reads transcript, LLM transforms, chunks+embeds, stores; dry-run flag
+- `bot.py` — all handlers, no ConversationHandler; state machine driven by DB session
+- `app.py` — FastAPI webhook + /cron/nudge endpoint for production (same pattern as inspiration_bot)
+
+**pyproject.toml updated**: `detective` (polling) and `detective-ingest` script entries added.
+
+**ruff clean, pyright 0 errors.**
+
+**Key decisions made during implementation:**
+
+- `pending_accusation` stored in DB (not context.user_data) so accusation flow survives bot restarts.
+  Simple: if session.pending_accusation is True, next text message is treated as the accusation.
+
+- `_case_brief_text()` and `_next_case_text()` separated cleanly. No context threading required.
+
+- Curator's file reading moved to `main()` (synchronous) rather than inside `async def ingest()`,
+  to satisfy ruff's ASYNC240 rule (no blocking Path.read_text inside async functions).
+
+- `strict=True` added to zip() in chunk_store — texts and embeddings must match 1:1; if embed()
+  returns a different count, we want an immediate error, not silent data corruption.
+
+- jsonb writes in curator use `json.dumps() + ::jsonb` cast (explicit and safe with asyncpg).
+  Session clues_examined also uses json.dumps() for the same reason.
+
+**Next: Stage 6** — test each module in isolation (`scripts/tests/`), starting with
+scorer (pure, no deps) and game_master (mock chunks to verify grounding prompt).
+
+## 2026-06-20 15:30 — Stage 6 complete: tests written, real bug found and fixed
+
+Wrote `scripts/tests/test_detective.py` — 28 offline tests, 4 integration tests (live LLM, skipped without credentials).
+
+**Coverage across modules (all offline):**
+- **scorer**: 8 tests — exact/partial/surname/case-insensitive name matching, CORRECT/WRONG_VERDICT/WRONG_PERSON outcomes, accusing the victim
+- **models**: 5 tests — enum values, CaseRecord construction, AccusationExtract validation
+- **chunk_store._vec**: 2 tests — pgvector literal formatting
+- **curator._chunk_text**: 5 tests — empty/short/overlap/count/no-empty-chunks
+- **bot helpers**: 4 tests — _pct edge cases, _SCORE_LINES coverage guard
+- **game_master (mock)**: 3 tests — chunk text in prompt, examined list in hint prompt, empty-chunks message
+- **accusation_extractor (mock)**: 1 test — returns None on exception
+
+**Bug found by testing:** `scorer._name_matches()` failed on "Muller" vs "Franz Müller".
+SequenceMatcher ratio was ~0.56, below the 0.75 threshold. The substring and last-name checks
+also failed because they compared against the un-normalized string. Players WILL type names without
+umlauts — this would have been a silent wrong-person result for one of our primary example cases.
+
+**Fix:** Added `_ascii()` normalizer in scorer — strips diacritics via NFKD + ASCII encode before
+any comparison. Now "Muller" → ascii → "muller", "Franz Müller" → "franz muller",
+and the substring check "muller" in "franz muller" catches it.
+
+This is exactly why we test atomic modules before composing them.
+
+**Integration tests written (live LLM):**
+- Accusation extractor: guilty and not-guilty paths with real inputs
+- Game master: grounding check (invented chunk fact should appear in answer), silent check (off-topic chunk → hedged response)
+
+All 44 tests pass. ruff clean. pyright 0 errors.
+
+**What's next (Stage 7):** The code is all there. Next real step is to ingest an actual Old Bailey
+transcript (`uv run detective-ingest --file transcript.txt --slug <slug>`) and run the bot
+locally (`uv run detective`) to test the game end-to-end. Then deploy to Railway.

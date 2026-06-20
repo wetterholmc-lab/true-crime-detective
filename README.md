@@ -6,16 +6,23 @@ An opinionated, batteries-included starter for building AI agents — from simpl
 
 ---
 
-## ✏️ Your project
+## The True-Crime Detective
 
-> Replace this section with *your* goal (this is stage 2 of the method — see below).
-> Keep it to a few sentences a friend would understand.
+*Causae verae ex archivo* — real causes from the archive.
 
-**What I'm building:** _(one sentence)_
+**What I'm building:** A single-player detective game built from genuine historical court
+records. Each case is a real trial — Old Bailey, CourtListener, newspaper archives. You
+examine evidence, question the record in natural language, name a culprit, then learn what
+really happened.
 
-**Who it's for and why:** _(a sentence or two)_
+**Who it's for:** People who find real historical crimes fascinating but find raw archives
+inaccessible. The pitch: you're not playing a game — you're investigating a murder that
+happened 150 years ago, using the actual trial transcript as your evidence file.
 
-**What "done" looks like:** _(what can the user do that they couldn't before?)_
+**What "done" looks like:** You receive a Telegram message — "🔎 A new case has crossed
+your desk." You examine evidence items, ask the game master questions, and it answers
+strictly from the trial record (never inventing facts). You make your accusation. The
+bot reveals the real verdict and scores you against history.
 
 ---
 

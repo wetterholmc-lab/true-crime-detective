@@ -20,6 +20,7 @@ Example:
         print(row["body"])
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,13 @@ import asyncpg
 from agent.config import get_settings
 
 _pool: asyncpg.Pool | None = None
+
+
+async def _init_conn(conn: asyncpg.Connection) -> None:
+    # asyncpg doesn't decode json/jsonb columns by default through Neon's pgbouncer
+    # proxy — register codecs so every connection decodes them to Python objects.
+    await conn.set_type_codec("json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+    await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -39,7 +47,7 @@ async def get_pool() -> asyncpg.Pool:
             raise RuntimeError("DATABASE_URL is not set. Add your Neon connection string to .env.")
         # statement_cache_size=0 keeps asyncpg working through Neon's connection
         # pooler (pgbouncer), which otherwise breaks asyncpg's prepared statements.
-        _pool = await asyncpg.create_pool(dsn=url, statement_cache_size=0)
+        _pool = await asyncpg.create_pool(dsn=url, statement_cache_size=0, init=_init_conn)
     return _pool
 
 

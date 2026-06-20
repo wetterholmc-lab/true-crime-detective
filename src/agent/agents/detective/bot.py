@@ -1,0 +1,390 @@
+"""Telegram bot for The True-Crime Detective.
+
+Run locally with long polling:
+    uv run detective
+
+In production the same handlers run via webhook — see app.py.
+
+State machine (all state lives in the DB, not context.user_data):
+  - On any message: look up active session.
+  - If session.pending_accusation: treat the message as the accusation text.
+  - Otherwise: treat the message as a free-form investigation question.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from loguru import logger
+from telegram import BotCommand, Update
+from telegram.constants import ChatAction
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+from agent.agents.detective import (
+    accusation_extractor,
+    case_store,
+    chunk_store,
+    game_master,
+    player_store,
+    scorer,
+    session_store,
+)
+from agent.agents.detective.models import Score, SessionStatus, Verdict
+from agent.config import get_settings
+from agent.logging_setup import setup_logging
+from agent.services import db
+from agent.services.llm import embed_one
+
+MIGRATIONS_DIR = Path(__file__).parents[4] / "migrations"
+
+COMMANDS = [
+    BotCommand("examine", "Examine evidence: /examine 1  or  /examine hat"),
+    BotCommand("accuse", "Make your formal accusation"),
+    BotCommand("hint", "Request a nudge from the record"),
+    BotCommand("close", "Close the case without accusing (reveals verdict)"),
+    BotCommand("record", "Your detective record"),
+    BotCommand("newcase", "Move on to the next case"),
+]
+
+_WELCOME = (
+    "🔎 Welcome, Detective.\n\n"
+    "You investigate real historical cases — Old Bailey, Victorian London. "
+    "The evidence is genuine. The verdict is real.\n\n"
+    "Examine evidence, question the record, make your accusation. "
+    "Then find out what history decided.\n\n"
+    "Let me find your first case..."
+)
+
+_SCORE_LINES: dict[Score, str] = {
+    Score.CORRECT: "✅ Correct — right person, right verdict.",
+    Score.WRONG_VERDICT: "⚠️ Right suspect, wrong verdict.",
+    Score.WRONG_PERSON: "❌ Wrong suspect.",
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _require_token() -> str:
+    token = get_settings().telegram_bot_token
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Add your @BotFather token to .env.")
+    return token
+
+
+def _case_brief_text(case: case_store.CaseRecord) -> str:  # type: ignore[name-defined]
+    evidence_lines = "\n".join(f"  • [{i + 1}] {e.label}" for i, e in enumerate(case.evidence))
+    return (
+        f"🔎 A new case has crossed your desk, Detective.\n\n"
+        f"{case.title}\n"
+        f"{case.court}, {case.year}\n\n"
+        f"{case.brief}\n\n"
+        f"Evidence on file:\n{evidence_lines}\n\n"
+        f"Ask a question — or use:\n"
+        f"/examine N · /accuse · /hint · /record"
+    )
+
+
+async def _next_case_text(telegram_id: int) -> str:
+    """Return the brief for the next unplayed case, or an empty-file message."""
+
+    case = await case_store.get_next_case(telegram_id)
+    if case is None:
+        record = await player_store.get_player_record(telegram_id)
+        pct = _pct(record.cases_correct, record.cases_attempted)
+        return (
+            "🗂 You've cleared the case file, Detective.\n\n"
+            f"Cases investigated: {record.cases_attempted}\n"
+            f"Correct verdicts: {record.cases_correct}/{record.cases_attempted} ({pct}%)\n\n"
+            "No new cases are loaded yet. Check back soon."
+        )
+    await session_store.open_session(telegram_id, case.id)
+    return _case_brief_text(case)
+
+
+def _pct(correct: int, attempted: int) -> int:
+    return round(correct / attempted * 100) if attempted else 0
+
+
+async def _reveal_and_next(
+    telegram_id: int,
+    case: case_store.CaseRecord,  # type: ignore[name-defined]
+    score: Score | None,
+    accusation_name: str | None,
+    accusation_verdict: Verdict | None,
+) -> tuple[str, str]:
+    """Return (reveal_text, next_case_text)."""
+    await player_store.record_outcome(telegram_id, score)
+    record = await player_store.get_player_record(telegram_id)
+    pct = _pct(record.cases_correct, record.cases_attempted)
+
+    if score is not None and accusation_name and accusation_verdict:
+        v_label = "Guilty" if accusation_verdict == Verdict.GUILTY else "Not Guilty"
+        header = f"{_SCORE_LINES[score]}\nYou said: {accusation_name} — {v_label}\n\n"
+    else:
+        header = ""
+
+    reveal = (
+        f"{header}"
+        f"THE REAL VERDICT:\n{case.verdict_text}\n\n"
+        f"{case.aftermath_text}\n\n"
+        f"🏅 DETECTIVE RECORD: "
+        f"{record.cases_correct}/{record.cases_attempted} correct · {pct}% accuracy"
+    )
+    next_text = await _next_case_text(telegram_id)
+    return reveal, next_text
+
+
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
+
+
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    await player_store.get_or_create_player(user.id)
+    active = await session_store.get_active_session(user.id)
+    if active:
+        case = await case_store.get_case(active.case_id)
+        evidence_lines = "\n".join(f"  • [{i + 1}] {e.label}" for i, e in enumerate(case.evidence))
+        await update.message.reply_text(
+            f"Welcome back, Detective. You're mid-case:\n\n"
+            f"{case.title}\n\n"
+            f"Evidence on file:\n{evidence_lines}\n\n"
+            f"Ask a question — or /examine N · /accuse · /hint"
+        )
+    else:
+        await update.message.reply_text(_WELCOME)
+        next_text = await _next_case_text(user.id)
+        await update.message.reply_text(next_text)
+
+
+async def handle_examine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    session = await session_store.get_active_session(user.id)
+    if session is None:
+        await update.message.reply_text("No active case. Send /start to begin.")
+        return
+
+    arg = " ".join(context.args or []).strip()
+    if not arg:
+        await update.message.reply_text("Which item? Try /examine 1 or /examine hat")
+        return
+
+    ref: str | int = int(arg) if arg.isdigit() else arg
+    item = await case_store.get_evidence_item(session.case_id, ref)
+    if item is None:
+        await update.message.reply_text(
+            "That item isn't in the evidence list. Try /examine N with the item number."
+        )
+        return
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    case = await case_store.get_case(session.case_id)
+    query_emb = await embed_one(f"{item.label} {item.summary}")
+    chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=3)
+    description = await game_master.answer_question(
+        case, chunks, f"Describe this evidence item from the record: {item.label}"
+    )
+    await session_store.mark_evidence_examined(session.id, item.id)
+    await session_store.touch_session(session.id)
+    await update.message.reply_text(f"📁 EVIDENCE: {item.label}\n\n{description}")
+
+
+async def handle_accuse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    session = await session_store.get_active_session(user.id)
+    if session is None:
+        await update.message.reply_text("No active case. Send /start to begin.")
+        return
+    await session_store.set_pending_accusation(session.id, True)
+    await update.message.reply_text(
+        "⚖️ State your accusation, Detective.\n\n"
+        "Who do you believe is responsible, and is your verdict Guilty or Not Guilty?\n\n"
+        'Example: "I accuse Franz Müller. Guilty."'
+    )
+
+
+async def handle_hint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    session = await session_store.get_active_session(user.id)
+    if session is None:
+        await update.message.reply_text("No active case. Send /start to begin.")
+        return
+    if session.hint_count >= 3:
+        await update.message.reply_text(
+            "You've used all 3 hints for this case, Detective.\n"
+            "Make your accusation with /accuse, or close the case with /close."
+        )
+        return
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    case = await case_store.get_case(session.case_id)
+    # Focus on unexamined evidence; fall back to first item
+    unexamined = [e for e in case.evidence if e.id not in session.clues_examined]
+    focus = unexamined[0] if unexamined else case.evidence[0]
+    query_emb = await embed_one(f"{focus.label} {focus.summary}")
+    chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=3)
+    hint = await game_master.generate_hint(case, chunks, session.clues_examined)
+
+    await session_store.increment_hint_count(session.id)
+    new_count = session.hint_count + 1
+    closing = "\n\nThat was your last hint. /accuse when ready." if new_count >= 3 else ""
+    await update.message.reply_text(f"🕵️ A nudge, Detective:\n\n{hint}{closing}")
+
+
+async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    session = await session_store.get_active_session(user.id)
+    if session is None:
+        await update.message.reply_text("No active case.")
+        return
+    case = await case_store.get_case(session.case_id)
+    await session_store.close_session(session.id, SessionStatus.ABANDONED)
+    reveal, next_text = await _reveal_and_next(user.id, case, None, None, None)
+    await update.message.reply_text(reveal)
+    await update.message.reply_text(next_text)
+
+
+async def handle_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    record = await player_store.get_player_record(user.id)
+    pct = _pct(record.cases_correct, record.cases_attempted)
+    await update.message.reply_text(
+        f"🗂 YOUR DETECTIVE RECORD\n\n"
+        f"Cases investigated: {record.cases_attempted}\n"
+        f"Correct ✅: {record.cases_correct}\n"
+        f"Wrong verdict ⚠️: {record.cases_wrong_verdict}\n"
+        f"Wrong suspect ❌: {record.cases_wrong_person}\n"
+        f"Abandoned: {record.cases_abandoned}\n"
+        f"Accuracy: {pct}%"
+    )
+
+
+async def handle_newcase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    session = await session_store.get_active_session(user.id)
+    if session:
+        await session_store.close_session(session.id, SessionStatus.ABANDONED)
+        await player_store.record_outcome(user.id, None)
+    next_text = await _next_case_text(user.id)
+    await update.message.reply_text(next_text)
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None or update.message is None or not update.message.text:
+        return
+
+    text = update.message.text.strip()
+    session = await session_store.get_active_session(user.id)
+
+    if session is None:
+        await player_store.get_or_create_player(user.id)
+        await update.message.reply_text(_WELCOME)
+        next_text = await _next_case_text(user.id)
+        await update.message.reply_text(next_text)
+        return
+
+    if session.pending_accusation:
+        await _process_accusation(update, session, text)
+        return
+
+    # Free-form investigation question
+    await update.message.chat.send_action(ChatAction.TYPING)
+    case = await case_store.get_case(session.case_id)
+    query_emb = await embed_one(text)
+    chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=5)
+    answer = await game_master.answer_question(case, chunks, text)
+    await session_store.touch_session(session.id)
+    await update.message.reply_text(answer)
+
+
+async def _process_accusation(
+    update: Update,
+    session: session_store.Session,  # type: ignore[name-defined]
+    text: str,
+) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+    user = update.effective_user
+
+    await session_store.set_pending_accusation(session.id, False)
+    await update.message.chat.send_action(ChatAction.TYPING)
+
+    extract = await accusation_extractor.extract_accusation(text)
+    if extract is None:
+        await update.message.reply_text(
+            "I didn't catch that, Detective. "
+            'Try: "I accuse [Name]. Guilty." — or /accuse to try again.'
+        )
+        return
+
+    case = await case_store.get_case(session.case_id)
+    score = scorer.score_accusation(extract, case)
+    await session_store.close_session(
+        session.id,
+        SessionStatus.SOLVED,
+        accusation_name=extract.name,
+        accusation_verdict=extract.verdict,
+        score=score,
+    )
+    reveal, next_text = await _reveal_and_next(user.id, case, score, extract.name, extract.verdict)
+    await update.message.reply_text(reveal)
+    await update.message.reply_text(next_text)
+
+
+# ---------------------------------------------------------------------------
+# Application wiring
+# ---------------------------------------------------------------------------
+
+
+async def post_init(app: Application) -> None:  # type: ignore[type-arg]
+    applied = await db.apply_migrations(MIGRATIONS_DIR)
+    if applied:
+        logger.info("Applied migrations: {}", applied)
+    await app.bot.set_my_commands(COMMANDS)
+
+
+def build_application() -> Application:  # type: ignore[type-arg]
+    token = _require_token()
+    app = ApplicationBuilder().token(token).post_init(post_init).build()
+    app.add_handler(CommandHandler("start", handle_start))
+    app.add_handler(CommandHandler("examine", handle_examine))
+    app.add_handler(CommandHandler("accuse", handle_accuse))
+    app.add_handler(CommandHandler("hint", handle_hint))
+    app.add_handler(CommandHandler("close", handle_close))
+    app.add_handler(CommandHandler("record", handle_record))
+    app.add_handler(CommandHandler("newcase", handle_newcase))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    return app
+
+
+def main() -> None:
+    setup_logging()
+    logger.info("Starting The True-Crime Detective (polling)...")
+    app = build_application()
+    app.run_polling(drop_pending_updates=True)

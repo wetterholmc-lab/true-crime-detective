@@ -131,7 +131,6 @@ class Settings(BaseSettings):
         return self.environment == "production"
 
 
-
 @lru_cache
 def get_settings() -> Settings:
     """Return the settings, loaded once and cached.

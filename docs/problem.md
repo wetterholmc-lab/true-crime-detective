@@ -2,58 +2,54 @@
 
 **Stage 1 — Identify the limits of your current agency.**
 
-Before building anything, get clear on what you *can't* do well today that an agent
-could help with. The sharper the problem, the better the agent.
+## The problem
 
-## Prompts to answer
+Historical court records are extraordinary primary sources — vivid, factual, often shocking — but
+they're locked behind a reading experience that kills the drama. A 200-page Old Bailey transcript
+dumps you into dense 19th-century legalese with no guide, no structure, and no game.
 
-- What task is **tedious, slow, or impossible** for you (or your user) right now?
-- How is it done today, and what specifically goes wrong or takes too long?
-- Why is *now* a good time — what makes an AI agent able to help here?
-- Who feels this pain? How often? How much does it cost them (time, money, stress)?
-
-## The problem, in your words
-
-Knowing whether I've eaten enough protein today — without actively logging every meal in an
-app. Opening a calorie tracker, searching for a dish, estimating the portion, and saving it
-takes long enough that I skip it. The result: I never really know where I stand until it's
-evening and too late to do anything about it.
-
-I know I should eat more protein — my doctor has said so, age demands it — but I have no easy
-way to know if I'm actually doing it. Current apps are too friction-heavy to use consistently:
-you have to search, estimate, log. I want to take a photo of my food and know where I stand —
-and get a nudge in the right direction if I'm on track to miss my goal for the day.
+There is no agent today that can take a genuine trial transcript and turn it into a playable,
+grounded mystery where you actually investigate: examine specific evidence, question the record,
+form a theory, name a culprit, and then discover whether you were right.
 
 ## How it's done today — and what goes wrong
 
-Either it doesn't happen at all, or it's done via a manual app like MyFitnessPal. What goes
-wrong:
+If you want to engage with a real historical case, you:
+1. Search archives directly (Old Bailey Online, CourtListener, Google Books newspaper scans)
+2. Read the raw transcript — dense, unindexed, hundreds of pages
+3. Piece together a picture manually, hoping you noticed the key clues
 
-1. It takes too long to look up home-cooked food.
-2. It requires knowing what's high in protein — which isn't always obvious.
-3. You get no context on whether the amount is enough, just a number.
+What goes wrong:
+- The format is hostile to casual reading — dense Victorian legalese, procedural asides, Latin
+- No structure: you don't know what evidence exists until you've read everything
+- No interactivity: you can't ask the record a question
+- No guidance: you can't know whether a detail is significant or irrelevant
+- No payoff: reading a verdict at the end of a 200-page document doesn't feel like solving it
 
-## Why now — what makes an AI agent able to help
+## Why an agent makes this possible now
 
-Vision models can now estimate protein content from a photo with reasonable accuracy. That
-makes the friction minimal: one photo is enough. The agent can also track cumulative intake,
-calculate a personal goal based on age, weight, and activity level, and give proactive
-feedback at the right moment — no manual searching, no math, no list to check off.
+Three things converge:
+1. **RAG grounding**: We can embed the full transcript and retrieve the exact passage relevant to
+   any player question — the LLM answers from real text, not from training memory
+2. **Structured extraction**: The LLM can transform a raw transcript into a clean case brief,
+   cast list, and evidence index — the scaffolding the original format lacks
+3. **Conversational interface**: A Telegram bot turns investigation into dialogue — natural,
+   async, available anywhere
 
-## Who feels this pain
+## The unique challenge: grounding
 
-Primarily: Caroline, every day. More broadly: anyone who has been told "eat more protein" by a
-doctor, dietitian, or personal trainer but has no reliable way to follow through — typically
-40+, with weight or muscle goals. The cost isn't money but behavior: without feedback, you
-drift and the goal fades.
+Unlike most LLM applications, this one has a *correctness constraint*: the agent must never
+invent facts. A game built on hallucinations is not just broken — it's dishonest. The entire
+premise is "these are the real facts of a real case."
 
-## Why an agent (not just a script or a human)
+This makes grounding the single most important engineering challenge. The solution is strict
+retrieval-augmented generation: every player question triggers a semantic search over embedded
+transcript chunks, and the game master is instructed to answer only from retrieved text — and
+to say "the record is silent on that" when the answer isn't there.
 
-The intelligence buys three things:
+## Who this is for
 
-1. **Interpret a photo** and estimate protein content without the user needing to know what's
-   what.
-2. **Adapt over time** — learn from corrections and remember recipes — so estimates improve
-   with use.
-3. **Decide when and what to say:** no reminder if you've already hit your goal, a
-   context-aware question about dinner plans if you're falling behind.
+Primarily: people who find real historical crimes fascinating but find archives inaccessible.
+True crime readers, history enthusiasts, people who play Sherlock Holmes or Cluedo but want
+something grounded in fact. The pitch: "You're not playing a game. You're investigating a
+real murder that happened 150 years ago."

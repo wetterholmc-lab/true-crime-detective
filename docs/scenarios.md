@@ -1,173 +1,213 @@
 # Scenarios
 
-**Stage 3 — Concrete end-to-end walkthroughs.** These are what you'll test against
-later (stage 8). Write them as real, specific stories — actual example inputs and the
-output you'd expect.
+**Stage 3 — Concrete end-to-end walkthroughs.** Real inputs, expected outputs.
+These become the test checklist for stage 8.
+
+Source cases are from Old Bailey Online (public domain). Verdicts are real.
 
 ---
 
-## Happy paths
+## Happy path: New case arrival
 
-### 0. Onboarding — custom protein goal
-1. Caroline completes the onboarding questions (age, weight, height, etc.).
-2. The agent replies: "Based on your profile, I suggest **110g** of protein per day.
-   Would you like to use this, or set your own goal?" with two buttons.
-3. Caroline taps "Set my own" and types "130".
-4. The agent replies: "Got it — your daily protein goal is set to 130g."
+**Case used:** R v. Franz Müller (1864) — first murder on an English railway.
 
-**Expected result:** The saved goal is 130g, not the calculated 110g. The suggested
-value is always shown so the user has a reference point.
+1. Player has no active case. They type anything or the cron fires.
+2. Bot pushes:
+   ```
+   🔎 A new case has crossed your desk, Detective.
 
----
+   THE PEOPLE v. FRANZ MÜLLER
+   Old Bailey, October 1864
 
-### 0b. Onboarding — perimenopause question
-1. Caroline (46 years old, female) completes the onboarding.
-2. After answering "No" to the pregnant/breastfeeding question, the agent asks:
-   "Are you in perimenopause or menopause? This affects protein needs."
-3. Caroline answers "Yes".
-4. The suggested protein goal is 15g higher than it would otherwise be.
+   Thomas Briggs, a bank clerk, was found dead on the North London Railway —
+   his skull fractured, his gold watch chain missing. A hat found in the carriage
+   did not belong to him.
 
-**Expected result:** Question only appears for females aged 40+ who are not pregnant.
-Males, "other" sex, and pregnant users skip it.
+   The accused: Franz Müller, a German tailor, 24 years old, who had already
+   boarded a ship to New York before the body was identified.
 
----
+   Evidence on file:
+     • [1] Müller's hat (left at scene)
+     • [2] Briggs's hat (found with Müller in New York)
+     • [3] Jeweller's testimony
+     • [4] Ship's passenger manifest
+     • [5] Cab driver's statement
 
-### 1. Photo of simple food — with contextual feedback
-1. Caroline sends a photo of scrambled eggs at 8am. Goal: 110g.
-2. The agent replies: "Logged: scrambled eggs — about 18–24g protein.
-   Total today: 21g of your 110g goal.
-   That's a solid breakfast — you're on track for the morning. To boost it a bit,
-   add a slice of smoked salmon (~10g) or some cottage cheese on the side (~12g)."
+   What would you like to do?
+   /examine 1  — examine a piece of evidence
+   /ask — ask a question about the case
+   /accuse — name your suspect
+   /hint — request a nudge
+   /record — your detective record
+   ```
 
-**Expected result:** A protein range (never a single precise number), the running daily
-total, and a short contextual comment on whether the amount is appropriate for the time
-of day. If low, 1–2 concrete additions are suggested.
-
----
-
-### 2. Home-cooked food — ingredient walkthrough
-1. Caroline sends a photo of a pot of lentil soup.
-2. The agent recognises it's home-cooked and asks: "Looks like lentil soup — want to tell
-   me roughly what went into it and how many portions? I'll calculate protein per serving."
-3. Caroline replies: "Red lentils 400g, chicken stock, one onion. Made 4 portions."
-4. The agent calculates and replies: "About 18–22g protein per portion. Logged 1 portion.
-   Total today: 83g of your 110g goal. Want me to save this recipe for next time?"
-5. Caroline says yes. The recipe is saved.
-
-**Expected result:** Per-portion protein estimate, daily total updated, recipe saved for
-reuse.
+**Expected:** Clean brief, evidence list with numbered items, command menu.
 
 ---
 
-### 3. Status check at any time — any language
-1. Caroline types "status", "how am I doing?", "what's left?", "hur ligger jag till?",
-   "combien il me reste?" — the bot understands natural language in any language.
-2. The agent replies: "So far today: 83g protein of your 110g goal. You have about 27g left.
-   Logged meals: scrambled eggs (morning), chicken and rice (lunch), lentil soup (afternoon)."
+## Happy path: Examine evidence
 
-**Expected result:** Clear summary of total eaten, goal, remainder, and what was logged —
-available any time on demand.
+1. Player sends `/examine 2` (Briggs's hat found with Müller).
+2. Bot retrieves the relevant transcript chunk and replies:
+   ```
+   📁 EVIDENCE ITEM 2: Briggs's Hat
 
----
+   From the trial record:
+   "The hat produced was identified by Mr Briggs's son as belonging to his father.
+   It was smaller in the crown than the hat left behind in the carriage. The
+   prisoner had it with him when arrested aboard the Victoria in New York harbour."
 
-### 4. 15:00 reminder — protein missing
-1. At 15:00, Caroline has logged 60g out of 110g.
-2. The agent sends: "Afternoon check-in — you're at 60g of your 110g goal. Still 50g to go.
-   Are you planning dinner tonight?"
-3. Caroline replies "yes".
-4. The agent replies: "Great — here are some dinner ideas that would get you close:
-   - Salmon fillet with veg (~35g)
-   - Chicken stir-fry (~40g)
-   - Lentil dal (~22g)
-   If dinner doesn't quite cover it, a Greek yoghurt afterwards (~15g) would close the gap."
+   The detective noted: this hat was in Müller's possession 3,000 miles from
+   the scene.
+   ```
 
-**Expected result:** Concrete, inspiring suggestions tailored to the deficit — not generic
-advice. Dinner ideas come first; a snack is only mentioned if the gap is likely to remain
-after dinner. Suggestions respect the user's diet style (omnivore/vegetarian/vegan).
+**Expected:** Quote from the actual transcript. No invented details. A brief atmospheric
+frame (in italics or a header) that doesn't add facts — just context.
 
 ---
 
-### 5. 15:00 reminder — goal already reached
-1. At 15:00, Caroline has logged 115g out of 110g.
-2. The agent sends: "You've already hit your protein goal for today — 115g logged. Nice work,
-   nothing left to do on that front."
+## Happy path: Free-form question
 
-**Expected result:** Positive confirmation, no unnecessary reminder or snack suggestion.
+1. Player asks: "Did Müller have a motive?"
+2. System embeds the question, retrieves top-5 chunks, passes to game master.
+3. Bot replies:
+   ```
+   The trial record doesn't speak explicitly to motive, Detective. But the
+   testimony of Mr Death, the jeweller of Cheapside, may interest you:
 
----
+   "The prisoner came to my shop on the evening of the 9th July and offered
+   for sale a gold watch chain. He said it was his own property."
 
-### 9. Meal suggestion on request — any language
-1. Caroline types "what should I eat for lunch?", "vad ska jag äta till lunch?", or
-   "que manger au déjeuner?" after logging breakfast (21g of 110g).
-2. The agent replies: "You have 89g left to hit your goal today.
-   Suggestions for lunch:
-   - Grilled chicken salad (~40g)
-   - Tuna with wholegrain crackers (~35g)
-   - Greek yoghurt bowl with nuts (~25g)"
+   The chain was later identified as belonging to Thomas Briggs.
+   ```
 
-**Expected result:** Concrete suggestions for the named meal, calibrated to the remaining
-deficit, respecting diet style. If the goal is already reached, says so and offers
-suggestions as inspiration only.
+**Expected:** Grounded in retrieved text. "The record doesn't speak to X" when
+the chunk doesn't contain the answer. Quotes where possible.
 
 ---
 
-### 10. Correction with multiple meals logged today
-1. Caroline has logged three meals today and types "actually that was more like 50g".
-2. The bot replies with an inline keyboard: "Which meal would you like to correct?
-   - Scrambled eggs (morning)
-   - Chicken and rice (lunch)
-   - Lentil soup (afternoon)"
-3. Caroline taps "Chicken and rice".
-4. The bot replies: "I'll update that to 50g — shall I save that?" (yes/no)
-5. Caroline confirms. Total is recalculated.
+## Happy path: Making an accusation
 
-**Expected result:** Correction targets the right meal. If only one meal exists, the keyboard is skipped.
+1. Player sends `/accuse`.
+2. Bot replies:
+   ```
+   ⚖️  State your accusation, Detective.
 
----
+   Who do you believe is responsible? And do you believe they are guilty or not guilty?
 
-### 11. Setting timezone
-1. Caroline sends `/timezone`.
-2. The bot shows a 3×3 keyboard: UTC-8, UTC-6, UTC-4, UTC-1, UTC+0, UTC+1, UTC+2, UTC+5, UTC+10.
-3. Caroline taps UTC+2.
-4. The bot replies: "Timezone set to UTC+2. Your daily reminder will arrive at 15:00 your local time."
+   Example: "I accuse Franz Müller. Guilty."
+   ```
+3. Player replies: "Franz Müller. Guilty."
+4. Bot extracts name and verdict, scores it, reveals:
+   ```
+   ✅ YOUR ACCUSATION: Franz Müller — Guilty
 
-**Expected result:** Timezone stored in the database. Future reminders arrive at 15:00 local time, not UTC.
+   THE REAL VERDICT:
+   Franz Müller was found GUILTY by the jury on 27 October 1864. He was
+   executed on 14 November 1864 at Newgate Prison.
 
----
+   The case turned on the hat, the stolen watch chain, and the jeweller's
+   testimony. The defence argued the evidence was circumstantial — but the
+   jury was not persuaded.
 
-## Edge cases
+   🏅 DETECTIVE RECORD: 1 case solved. Accuracy: 100%.
 
-### 6. Unclear or blurry photo
-1. Caroline sends a blurry photo where the food is hard to identify.
-2. The agent replies: "I can't make out the food clearly enough to give a reliable estimate.
-   Could you send another photo or describe what you ate?"
+   A new case will arrive shortly, Detective.
+   ```
 
-**Expected result:** Honest admission that it can't tell, with a clear ask for more info.
-Never a confident guess from a bad photo.
+**Expected:** Score shown clearly. Real verdict and brief explanation. Record updated.
+Next case offered.
 
 ---
 
-### 7. Non-food photo
-1. Caroline accidentally sends a photo of her desk.
-2. The agent replies: "That doesn't look like food — did you mean to send a different photo?"
+## Happy path: Hint nudge
 
-**Expected result:** Short, friendly clarification. No protein logged.
+1. Player has been inactive for 24 hours with no accusation.
+2. Bot sends unprompted:
+   ```
+   🕵️ Still on the Müller case, Detective?
+
+   A nudge: consider the hat left behind at the scene. Why would a murderer
+   leave his own hat — and take the victim's?
+   ```
+3. This hint is drawn from evidence in the record, not invented.
+
+**Expected:** Hint points toward real evidence. Doesn't give away the verdict.
+Maximum 3 hints per case before offering to close.
 
 ---
 
-### 8. Wrong guess — correction and learning
-1. Caroline logs a meal; the agent estimates 20–28g protein.
-2. Caroline replies: "No, it was more like 40g — I used a lot of chicken."
-3. The agent replies: "Got it, I'll update that to 40g. Noted for next time you log something
-   similar. Total today: 95g of your 110g goal."
-4. The correction is saved in the database and used as a reference for future similar meals.
+## Edge case: Question with no answer in the record
 
-**Expected result:** Correction accepted gracefully, confirmed before saving, daily total
-recalculated, preference remembered.
+1. Player asks: "What happened to Müller's family after the execution?"
+2. Retrieval finds no relevant chunks.
+3. Bot replies:
+   ```
+   The trial record is silent on that, Detective. What we have is the testimony
+   from the courtroom — events after the verdict fall outside the transcript.
+   ```
+
+**Expected:** Clear, honest boundary. No invention.
+
+---
+
+## Edge case: Player tries to get the verdict early
+
+1. Player asks: "Just tell me — did he do it?"
+2. Bot replies:
+   ```
+   That's for you to decide, Detective. The facts are in the record.
+   When you're ready, use /accuse.
+   ```
+
+**Expected:** In-character refusal. No spoiler.
+
+---
+
+## Edge case: Player accuses the wrong person
+
+**Case:** R v. Adelaide Bartlett (1886) — chloroform poisoning.
+
+1. Player accuses "Edwin Bartlett" (the victim, not the accused).
+2. Bot extracts name, finds it doesn't match any accused person in the case.
+3. Bot replies:
+   ```
+   ❌ YOUR ACCUSATION: Edwin Bartlett — Guilty
+
+   Edwin Bartlett was the victim in this case, not a suspect. The accused
+   before the court was Adelaide Bartlett.
+
+   THE REAL VERDICT:
+   Adelaide Bartlett was found NOT GUILTY on 17 April 1886, to considerable
+   public astonishment. The cause of death — chloroform administered in a
+   lethal quantity — was established; how it was administered remained unclear.
+
+   🔍 DETECTIVE RECORD: 0/1 correct.
+   ```
+
+**Expected:** Handles wrong name gracefully. Still reveals verdict. Still updates record.
+
+---
+
+## Edge case: All cases completed
+
+1. Player types anything; all available cases are played.
+2. Bot replies:
+   ```
+   🗂 You've cleared the case file, Detective.
+
+   Cases investigated: 5
+   Correct verdicts: 4/5
+
+   No new cases are loaded yet. Check back soon — or type /record to review
+   your solved cases.
+   ```
+
+**Expected:** Clear message. No crash. Record shown.
 
 ---
 
 ## Done = all scenarios pass
 
-When every scenario here behaves as written, the agent is working. Keep this list up to
-date as you discover new cases during testing — add them, then make them pass.
+When every scenario behaves as written, the core game loop is working. Add new scenarios
+here as edge cases are discovered during testing.

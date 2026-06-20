@@ -1,54 +1,55 @@
 # User Stories
 
-**Stage 3 — Operationalize success as UX.** (Pair with `failure_modes.md` and `scenarios.md`.)
+**Stage 3 — Operationalize success as user behavior.**
 
-Turn the goal into concrete things a user wants to *do*. Each story is one sentence,
-from the user's point of view. Keep them small and testable.
-
-Format: **As a** _(who)_, **I want** _(to do something)_ **so that** _(benefit)_.
+One line each: *As a `<user>`, I want `<to do X>` so that `<benefit>`.*
 
 ---
 
-## Stories
+## Core investigation loop
 
-### Onboarding
-1. As a **new user**, I want to answer a few questions about my body and goals so that the bot calculates a realistic daily protein target for me.
-2. As a **new user**, I want to override the suggested protein goal with my own number so that I can use a target I've already settled on.
-3. As a **woman over 40**, I want to be asked about perimenopause during setup so that my protein goal accounts for the extra needs that come with hormonal changes.
+| # | Story |
+|---|-------|
+| 1 | As a player, I want to receive a case briefing (accused, crime, setting) when a new case arrives so I understand what I'm investigating. |
+| 2 | As a player, I want to see a list of evidence items so I know what the case file contains before I start asking. |
+| 3 | As a player, I want to examine a named evidence item ("examine the railway ticket") so I can read what the record actually says about it. |
+| 4 | As a player, I want to ask free-form questions about the case ("did the accused have an alibi?") so I can follow my own theory of the crime. |
+| 5 | As a player, I want the game master to say "the record is silent on that" when my question has no answer in the transcript, so I trust I'm dealing with real facts. |
+| 6 | As a player, I want a hint nudge when I've been inactive or am clearly stuck, so I don't abandon the case without resolution. |
+| 7 | As a player, I want to make a formal accusation (/accuse) naming a suspect, so I get a clear resolution. |
+| 8 | As a player, I want to see the real verdict and a brief of what actually happened, after I accuse, so I get the payoff. |
+| 9 | As a player, I want my accusation scored (correct / wrong person / wrong verdict) so I know how well I read the evidence. |
 
-### Logging food
-4. As a **user**, I want to send a photo of my meal so that the bot estimates and logs the protein without me having to look anything up.
-5. As a **user who cooks at home**, I want to describe my ingredients and get a per-portion estimate so that home-cooked meals are tracked as accurately as packaged food.
-6. As a **user**, I want to save a home-cooked recipe so that I can log it again quickly next time without re-describing the ingredients.
+## Player record & meta
 
-### Tracking progress
-7. As a **user**, I want to ask "how am I doing?" at any time so that I can see my running total and what I still need to eat.
-8. As a **user**, I want a reminder at 15:00 so that I don't forget to hit my goal before the day is over.
-9. As a **user outside CET**, I want to set my timezone so that the reminder arrives at 15:00 my local time, not some other time.
+| # | Story |
+|---|-------|
+| 10 | As a returning player, I want to see my detective record (/record): cases investigated, verdicts matched, accuracy rate. |
+| 11 | As a returning player, I want a new case to arrive (a push message) after I close one, so the game keeps going without me having to ask. |
+| 12 | As a player, I want to close a case without accusing (/close) so I'm not stuck forever if I give up — and I still get to see the real verdict. |
 
-### Corrections
-10. As a **user**, I want to correct a protein estimate after the fact so that my daily total stays accurate even when the bot guessed wrong.
-11. As a **user who has logged several meals**, I want to pick which meal to correct so that I don't accidentally change the wrong entry.
+## Curation / admin (internal)
 
-### Suggestions
-12. As a **user**, I want the bot to suggest what to eat for a specific meal so that I can hit my goal without having to think too hard about what to make.
-13. As a **vegetarian or vegan user**, I want suggestions that match my diet so that I never get told to eat chicken.
+| # | Story |
+|---|-------|
+| 13 | As the curator, I want to run a script that fetches a case from Old Bailey Online and ingests it (brief, cast, evidence list, embedded transcript) into the database, so new cases can be added without rewriting code. |
+| 14 | As the curator, I want the ingestion script to refuse a case without a verdict on record, so the game always has a resolution. |
 
 ---
 
 ## What "good" feels like
 
-You send a photo, get a number back in seconds, and always know where you stand. It
-feels like a knowledgeable friend who remembers what you ate — not a form to fill in.
-The magic moment is the first time the 15:00 reminder arrives and already knows you're
-behind; it makes the bot feel like it's actually paying attention.
+You get a message: "🔎 A new case has crossed your desk." The brief is gripping in three
+sentences. You examine evidence, ask a question, get a real answer from the record. You make
+your accusation. The reveal tells you what actually happened in 1845 — and whether you got it
+right. It feels like being a detective, not like reading a Wikipedia article.
 
 ---
 
 ## Out of scope (for now)
 
-- Responding in the user's language (bot responds in English; understands all languages)
-- Tracking macros other than protein (calories, carbs, fat)
-- Suggesting a full day's meal plan proactively (suggestions are on-demand or at 15:00)
-- Integration with external fitness apps or wearables
-- Weekly summaries or progress charts
+- Multiple simultaneous active cases per player
+- Multiplayer / cooperative mode
+- Cases from sources other than Old Bailey Online (CourtListener, newspapers — later)
+- Voice interface
+- Generating images or scene descriptions with media.generate (later)

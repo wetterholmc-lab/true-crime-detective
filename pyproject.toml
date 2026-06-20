@@ -29,6 +29,10 @@ agent = "agent.main:main"
 agent-doctor = "agent.doctor:main"
 # Run the protein tracker Telegram bot.
 proteinbot = "agent.agents.proteinbot.bot:main"
+# Run the True-Crime Detective bot (local polling).
+detective = "agent.agents.detective.bot:main"
+# Ingest a historical case: uv run detective-ingest --file transcript.txt --slug muller-1864
+detective-ingest = "agent.agents.detective.curator:main"
 
 [build-system]
 requires = ["hatchling"]
