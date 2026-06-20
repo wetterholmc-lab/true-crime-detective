@@ -82,15 +82,14 @@ def _require_token() -> str:
 
 
 def _case_brief_text(case: case_store.CaseRecord) -> str:  # type: ignore[name-defined]
-    evidence_lines = "\n".join(f"  • [{i + 1}] {e.label}" for i, e in enumerate(case.evidence))
     return (
         f"🔎 A new case has crossed your desk, Detective.\n\n"
         f"{case.title}\n"
         f"{case.court}, {case.year}\n\n"
         f"{case.brief}\n\n"
-        f"Evidence on file:\n{evidence_lines}\n\n"
-        f"Ask a question — or use:\n"
-        f"/examine N · /accuse · /hint · /record"
+        f"Evidence on file:\n{_evidence_lines(case)}\n\n"
+        f"Type a number to examine evidence, or ask a question freely.\n"
+        f"/accuse · /hint · /close · /record"
     )
 
 
@@ -115,6 +114,10 @@ def _pct(correct: int, attempted: int) -> int:
     return round(correct / attempted * 100) if attempted else 0
 
 
+def _evidence_lines(case: case_store.CaseRecord) -> str:  # type: ignore[name-defined]
+    return "\n".join(f"  {i + 1}. {e.label}" for i, e in enumerate(case.evidence))
+
+
 async def _authed(telegram_id: int) -> bool:
     """True if no password is configured, or the user has already entered it."""
     pw = get_settings().telegram_bot_password
@@ -123,14 +126,14 @@ async def _authed(telegram_id: int) -> bool:
     return await player_store.is_authenticated(telegram_id)
 
 
-async def _reveal_and_next(
+async def _build_reveal(
     telegram_id: int,
     case: case_store.CaseRecord,  # type: ignore[name-defined]
     score: Score | None,
     accusation_name: str | None,
     accusation_verdict: Verdict | None,
-) -> tuple[str, str]:
-    """Return (reveal_text, next_case_text)."""
+) -> str:
+    """Record the outcome and return the verdict reveal text."""
     await player_store.record_outcome(telegram_id, score)
     record = await player_store.get_player_record(telegram_id)
     pct = _pct(record.cases_correct, record.cases_attempted)
@@ -141,15 +144,14 @@ async def _reveal_and_next(
     else:
         header = ""
 
-    reveal = (
+    return (
         f"{header}"
         f"THE REAL VERDICT:\n{case.verdict_text}\n\n"
         f"{case.aftermath_text}\n\n"
         f"🏅 DETECTIVE RECORD: "
-        f"{record.cases_correct}/{record.cases_attempted} correct · {pct}% accuracy"
+        f"{record.cases_correct}/{record.cases_attempted} correct · {pct}% accuracy\n\n"
+        f"When you're ready for the next case: /newcase"
     )
-    next_text = await _next_case_text(telegram_id)
-    return reveal, next_text
 
 
 # ---------------------------------------------------------------------------
@@ -170,17 +172,43 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     active = await session_store.get_active_session(user.id)
     if active:
         case = await case_store.get_case(active.case_id)
-        evidence_lines = "\n".join(f"  • [{i + 1}] {e.label}" for i, e in enumerate(case.evidence))
         await update.message.reply_text(
             f"Welcome back, Detective. You're mid-case:\n\n"
             f"{case.title}\n\n"
-            f"Evidence on file:\n{evidence_lines}\n\n"
-            f"Ask a question — or /examine N · /accuse · /hint"
+            f"Evidence on file:\n{_evidence_lines(case)}\n\n"
+            f"Type a number to examine evidence, or ask a question freely.\n"
+            f"/accuse · /hint · /close · /record"
         )
     else:
         await update.message.reply_text(_WELCOME)
         next_text = await _next_case_text(user.id)
         await update.message.reply_text(next_text)
+
+
+async def _do_examine(
+    update: Update,
+    session: session_store.Session,  # type: ignore[name-defined]
+    ref: str | int,
+) -> None:
+    """Core examine logic — shared by /examine command and bare-number shortcut."""
+    if update.message is None:
+        return
+    item = await case_store.get_evidence_item(session.case_id, ref)
+    if item is None:
+        await update.message.reply_text(
+            "That item isn't in the evidence list. Type a number from 1 to examine evidence."
+        )
+        return
+    await update.message.chat.send_action(ChatAction.TYPING)
+    case = await case_store.get_case(session.case_id)
+    query_emb = await embed_one(f"{item.label} {item.summary}")
+    chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=3)
+    description = await game_master.answer_question(
+        case, chunks, f"Describe this evidence item from the record: {item.label}"
+    )
+    await session_store.mark_evidence_examined(session.id, item.id)
+    await session_store.touch_session(session.id)
+    await update.message.reply_text(f"📁 EVIDENCE: {item.label}\n\n{description}")
 
 
 async def handle_examine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -194,30 +222,12 @@ async def handle_examine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if session is None:
         await update.message.reply_text("No active case. Send /start to begin.")
         return
-
     arg = " ".join(context.args or []).strip()
     if not arg:
-        await update.message.reply_text("Which item? Try /examine 1 or /examine hat")
+        await update.message.reply_text("Which item? Type a number, e.g. /examine 1")
         return
-
     ref: str | int = int(arg) if arg.isdigit() else arg
-    item = await case_store.get_evidence_item(session.case_id, ref)
-    if item is None:
-        await update.message.reply_text(
-            "That item isn't in the evidence list. Try /examine N with the item number."
-        )
-        return
-
-    await update.message.chat.send_action(ChatAction.TYPING)
-    case = await case_store.get_case(session.case_id)
-    query_emb = await embed_one(f"{item.label} {item.summary}")
-    chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=3)
-    description = await game_master.answer_question(
-        case, chunks, f"Describe this evidence item from the record: {item.label}"
-    )
-    await session_store.mark_evidence_examined(session.id, item.id)
-    await session_store.touch_session(session.id)
-    await update.message.reply_text(f"📁 EVIDENCE: {item.label}\n\n{description}")
+    await _do_examine(update, session, ref)
 
 
 async def handle_accuse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -285,9 +295,8 @@ async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     case = await case_store.get_case(session.case_id)
     await session_store.close_session(session.id, SessionStatus.ABANDONED)
-    reveal, next_text = await _reveal_and_next(user.id, case, None, None, None)
+    reveal = await _build_reveal(user.id, case, None, None, None)
     await update.message.reply_text(reveal)
-    await update.message.reply_text(next_text)
 
 
 async def handle_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -358,6 +367,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _process_accusation(update, session, text)
         return
 
+    # Bare number → examine that evidence item (e.g. player types "1" instead of /examine 1)
+    if text.isdigit():
+        await _do_examine(update, session, int(text))
+        return
+
     # Free-form investigation question
     await update.message.chat.send_action(ChatAction.TYPING)
     case = await case_store.get_case(session.case_id)
@@ -397,9 +411,8 @@ async def _process_accusation(
         accusation_verdict=extract.verdict,
         score=score,
     )
-    reveal, next_text = await _reveal_and_next(user.id, case, score, extract.name, extract.verdict)
+    reveal = await _build_reveal(user.id, case, score, extract.name, extract.verdict)
     await update.message.reply_text(reveal)
-    await update.message.reply_text(next_text)
 
 
 # ---------------------------------------------------------------------------
