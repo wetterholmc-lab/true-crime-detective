@@ -1,5 +1,4 @@
-# Deploy config for the protein-tracking Telegram bot.
-# Railway runs startCommand WITHOUT a shell — no $PORT expansion, but we don't need it
-# (polling bots have no inbound HTTP).
+# Deploy config for The True-Crime Detective.
+# Production runs the FastAPI webhook app; Railway injects PORT and fastapi reads it.
 [deploy]
-startCommand = "proteinbot"
+startCommand = "fastapi run src/agent/agents/detective/app.py"
