@@ -9,13 +9,18 @@ from agent.agents.detective.models import Score, Session, SessionStatus, Verdict
 from agent.services import db
 
 
+def _j(value: Any) -> Any:
+    """Parse jsonb whether asyncpg returned it as str or as a Python object."""
+    return json.loads(value) if isinstance(value, str) else value
+
+
 def _row_to_session(row: Any) -> Session:
     return Session(
         id=row["id"],
         telegram_id=row["telegram_id"],
         case_id=row["case_id"],
         status=SessionStatus(row["status"]),
-        clues_examined=list(row["clues_examined"]),
+        clues_examined=list(_j(row["clues_examined"])),
         hint_count=row["hint_count"],
         pending_accusation=row["pending_accusation"],
         accusation_name=row["accusation_name"],

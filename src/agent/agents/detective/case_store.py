@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from agent.agents.detective.models import CaseRecord, CastMember, EvidenceItem, Verdict
 from agent.services import db
+
+
+def _j(value: Any) -> Any:
+    """Parse a jsonb column whether asyncpg returned it as str or already as a Python object.
+
+    Neon's pgbouncer proxy sometimes bypasses asyncpg's type-codec registration,
+    returning jsonb columns as raw JSON strings instead of decoded Python objects.
+    """
+    return json.loads(value) if isinstance(value, str) else value
 
 
 def _row_to_case(row: Any) -> CaseRecord:
@@ -18,8 +28,8 @@ def _row_to_case(row: Any) -> CaseRecord:
         accused_name=row["accused_name"],
         crime=row["crime"],
         brief=row["brief"],
-        cast=[CastMember(**m) for m in row["cast_json"]],
-        evidence=[EvidenceItem(**e) for e in row["evidence_json"]],
+        cast=[CastMember(**m) for m in _j(row["cast_json"])],
+        evidence=[EvidenceItem(**e) for e in _j(row["evidence_json"])],
         verdict=Verdict(row["verdict"]),
         verdict_text=row["verdict_text"],
         aftermath_text=row["aftermath_text"],
