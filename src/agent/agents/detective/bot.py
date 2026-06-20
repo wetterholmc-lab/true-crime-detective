@@ -115,6 +115,14 @@ def _pct(correct: int, attempted: int) -> int:
     return round(correct / attempted * 100) if attempted else 0
 
 
+async def _authed(telegram_id: int) -> bool:
+    """True if no password is configured, or the user has already entered it."""
+    pw = get_settings().telegram_bot_password
+    if not pw:
+        return True
+    return await player_store.is_authenticated(telegram_id)
+
+
 async def _reveal_and_next(
     telegram_id: int,
     case: case_store.CaseRecord,  # type: ignore[name-defined]
@@ -153,6 +161,11 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = update.effective_user
     if user is None or update.message is None:
         return
+    if not await _authed(user.id):
+        await update.message.reply_text(
+            "🔒 This bot is password-protected.\n\nEnter the password to begin:"
+        )
+        return
     await player_store.get_or_create_player(user.id)
     active = await session_store.get_active_session(user.id)
     if active:
@@ -173,6 +186,9 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def handle_examine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is None or update.message is None:
+        return
+    if not await _authed(user.id):
+        await update.message.reply_text("🔒 Enter the password first.")
         return
     session = await session_store.get_active_session(user.id)
     if session is None:
@@ -208,6 +224,9 @@ async def handle_accuse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     if user is None or update.message is None:
         return
+    if not await _authed(user.id):
+        await update.message.reply_text("🔒 Enter the password first.")
+        return
     session = await session_store.get_active_session(user.id)
     if session is None:
         await update.message.reply_text("No active case. Send /start to begin.")
@@ -223,6 +242,9 @@ async def handle_accuse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def handle_hint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is None or update.message is None:
+        return
+    if not await _authed(user.id):
+        await update.message.reply_text("🔒 Enter the password first.")
         return
     session = await session_store.get_active_session(user.id)
     if session is None:
@@ -254,6 +276,9 @@ async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = update.effective_user
     if user is None or update.message is None:
         return
+    if not await _authed(user.id):
+        await update.message.reply_text("🔒 Enter the password first.")
+        return
     session = await session_store.get_active_session(user.id)
     if session is None:
         await update.message.reply_text("No active case.")
@@ -268,6 +293,9 @@ async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def handle_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is None or update.message is None:
+        return
+    if not await _authed(user.id):
+        await update.message.reply_text("🔒 Enter the password first.")
         return
     record = await player_store.get_player_record(user.id)
     pct = _pct(record.cases_correct, record.cases_attempted)
@@ -286,6 +314,9 @@ async def handle_newcase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     if user is None or update.message is None:
         return
+    if not await _authed(user.id):
+        await update.message.reply_text("🔒 Enter the password first.")
+        return
     session = await session_store.get_active_session(user.id)
     if session:
         await session_store.close_session(session.id, SessionStatus.ABANDONED)
@@ -300,6 +331,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     text = update.message.text.strip()
+
+    # Password gate: treat any message from an unauthenticated user as a password attempt.
+    if not await _authed(user.id):
+        expected = get_settings().telegram_bot_password
+        if expected and text == expected:
+            await player_store.set_authenticated(user.id)
+            await player_store.get_or_create_player(user.id)
+            await update.message.reply_text("✅ Access granted, Detective.")
+            next_text = await _next_case_text(user.id)
+            await update.message.reply_text(next_text)
+        else:
+            await update.message.reply_text("Wrong password. Try again:")
+        return
+
     session = await session_store.get_active_session(user.id)
 
     if session is None:

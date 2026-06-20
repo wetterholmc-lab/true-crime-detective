@@ -60,3 +60,20 @@ async def get_player_record(telegram_id: int) -> PlayerRecord:
     if not row:
         return await get_or_create_player(telegram_id)
     return _row_to_player(row)
+
+
+async def is_authenticated(telegram_id: int) -> bool:
+    """Return True if the player has entered the correct password."""
+    row = await db.fetchrow(
+        "SELECT authenticated FROM detective_players WHERE telegram_id = $1", telegram_id
+    )
+    return bool(row and row["authenticated"])
+
+
+async def set_authenticated(telegram_id: int) -> None:
+    """Mark a player as authenticated. Upserts so it works before /start."""
+    await db.execute(
+        "INSERT INTO detective_players (telegram_id, authenticated) VALUES ($1, true) "
+        "ON CONFLICT (telegram_id) DO UPDATE SET authenticated = true",
+        telegram_id,
+    )
