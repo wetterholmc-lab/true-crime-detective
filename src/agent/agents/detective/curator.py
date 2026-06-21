@@ -2,21 +2,16 @@
 
 Usage:
     uv run detective-ingest --file path/to/transcript.txt --slug muller-1864
-    uv run detective-ingest --file transcript.txt --slug muller-1864 --dry-run
-
-How to get a transcript from Old Bailey Online (oldbaileyonline.org):
-1. Search for a trial by name, date, or crime type
-2. Open the full trial record page
-3. Copy the complete trial text (or download the plain-text version)
-4. Save it as a .txt file and pass it here with --file
+    uv run detective-ingest --url https://www.oldbaileyonline.org/record/t18641024-920 \
+        --slug muller-1864
+    uv run detective-ingest --url <url> --slug <slug> --dry-run
 
 The script will:
-  1. Read the transcript from the file
+  1. Read the transcript (from --file or fetched from --url via headless browser)
   2. Call an LLM to extract structured case data (brief, cast, evidence, verdict)
-  3. Refuse to proceed if no verdict is found (hard gate)
-  4. Chunk the transcript with overlap
-  5. Embed all chunks (baai/bge-m3 via OpenRouter)
-  6. Store everything in Neon: detective_cases + detective_chunks
+  3. Chunk the transcript with overlap
+  4. Embed all chunks (baai/bge-m3 via OpenRouter)
+  5. Store everything in Neon: detective_cases + detective_chunks
 
 Running it twice with the same --slug is safe (ON CONFLICT DO NOTHING).
 """
@@ -29,6 +24,8 @@ import json
 from pathlib import Path
 
 from loguru import logger
+from playwright.async_api import async_playwright
+from playwright_stealth import Stealth
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
@@ -41,6 +38,54 @@ from agent.services.llm import build_model, embed
 MIGRATIONS_DIR = Path(__file__).parents[4] / "migrations"
 CHUNK_SIZE = 400  # words per chunk
 CHUNK_OVERLAP = 50  # words of overlap between adjacent chunks
+
+_OLD_BAILEY_HOST = "www.oldbaileyonline.org"
+_TRIAL_TEXT_SELECTOR = ".source-text"
+
+
+async def fetch_transcript_from_url(url: str) -> str:
+    """Fetch a trial transcript from an Old Bailey Online record page.
+
+    Requires Playwright + Chromium (one-time install: uv run playwright install chromium).
+    Uses stealth mode to avoid bot detection.
+    """
+    if _OLD_BAILEY_HOST not in url:
+        raise SystemExit(f"URL must be from {_OLD_BAILEY_HOST}: {url}")
+
+    logger.info("Fetching transcript from URL: {}", url)
+    async with async_playwright() as p:
+        Stealth().hook_playwright_context(p)
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+
+        resp = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        if resp and resp.status == 403:
+            raise SystemExit(
+                "Old Bailey Online blocked the request (403). Try again or use --file."
+            )
+
+        await page.wait_for_timeout(5_000)
+
+        count = await page.locator(_TRIAL_TEXT_SELECTOR).count()
+        if count == 0:
+            body = await page.inner_text("body")
+            if "could not be found" in body.lower():
+                raise SystemExit(
+                    f"Trial record not found at: {url}\n"
+                    "Check the URL — the trial ID in the path may be wrong."
+                )
+            raise SystemExit(
+                f"Could not find trial text on page. Selector '{_TRIAL_TEXT_SELECTOR}' missing."
+            )
+
+        text = await page.locator(_TRIAL_TEXT_SELECTOR).first.inner_text()
+        await browser.close()
+
+    if not text.strip():
+        raise SystemExit("Fetched page but trial text was empty.")
+
+    logger.info("Fetched {} words from URL", len(text.split()))
+    return text.strip()
 
 
 class CaseTransform(BaseModel):
@@ -167,7 +212,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Ingest a historical case transcript into the detective database"
     )
-    parser.add_argument("--file", required=True, type=Path, help="Path to transcript .txt file")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--file", type=Path, help="Path to transcript .txt file")
+    source.add_argument(
+        "--url",
+        help="Old Bailey Online record URL, e.g. https://www.oldbaileyonline.org/record/t18641024-920",
+    )
     parser.add_argument("--slug", required=True, help="Unique slug, e.g. 'muller-1864'")
     parser.add_argument(
         "--dry-run",
@@ -176,11 +226,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.file.exists():
-        raise SystemExit(f"File not found: {args.file}")
-
-    transcript = args.file.read_text(encoding="utf-8").strip()
-    if not transcript:
-        raise SystemExit(f"File is empty: {args.file}")
+    if args.file:
+        if not args.file.exists():
+            raise SystemExit(f"File not found: {args.file}")
+        transcript = args.file.read_text(encoding="utf-8").strip()
+        if not transcript:
+            raise SystemExit(f"File is empty: {args.file}")
+    else:
+        transcript = asyncio.run(fetch_transcript_from_url(args.url))
 
     asyncio.run(ingest(slug=args.slug, transcript=transcript, dry_run=args.dry_run))
