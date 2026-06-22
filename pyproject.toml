@@ -35,6 +35,8 @@ proteinbot = "agent.agents.proteinbot.bot:main"
 detective = "agent.agents.detective.bot:main"
 # Ingest a historical case: uv run detective-ingest --file transcript.txt --slug muller-1864
 detective-ingest = "agent.agents.detective.curator:main"
+# Pre-generate evidence illustrations: uv run detective-generate-images [--slug muller-1864]
+detective-generate-images = "agent.agents.detective.image_generator:main"
 
 [build-system]
 requires = ["hatchling"]

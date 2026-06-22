@@ -13,6 +13,7 @@ State machine (all state lives in the DB, not context.user_data):
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from loguru import logger
@@ -32,6 +33,7 @@ from agent.agents.detective import (
     accusation_extractor,
     case_store,
     chunk_store,
+    evidence_image_store,
     game_master,
     player_store,
     scorer,
@@ -225,12 +227,34 @@ async def _do_examine(
     case = await case_store.get_case(session.case_id)
     query_emb = await embed_one(f"{item.label} {item.summary}")
     chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=3)
-    description = await game_master.answer_question(
-        case, chunks, f"Describe this evidence item from the record: {item.label}"
-    )
+
+    question = f"Describe this evidence item from the record: {item.label}"
+    cached_ref = await evidence_image_store.get_image_ref(session.case_id, item.id)
+
+    if cached_ref:
+        # Cache hit: use stored Telegram file_id + run description only.
+        description = await game_master.answer_question(case, chunks, question)
+        image_ref: str | None = cached_ref
+    else:
+        # Cache miss: generate illustration and description in parallel.
+        description, image_ref = await asyncio.gather(
+            game_master.answer_question(case, chunks, question),
+            evidence_image_store.generate_image(item),
+        )
+
     await session_store.mark_evidence_examined(session.id, item.id)
     await session_store.touch_session(session.id)
-    await update.message.reply_text(f"📁 EVIDENCE: {item.label}\n\n{description}")
+
+    if image_ref:
+        msg = await update.message.reply_photo(image_ref, caption=f"📁 {item.label}")
+        # After first send, Telegram gives us a permanent file_id — cache it.
+        if not cached_ref and msg.photo:
+            await evidence_image_store.store_image_ref(
+                session.case_id, item.id, msg.photo[-1].file_id
+            )
+        await update.message.reply_text(description)
+    else:
+        await update.message.reply_text(f"📁 EVIDENCE: {item.label}\n\n{description}")
 
 
 async def handle_examine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
