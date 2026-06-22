@@ -66,10 +66,8 @@ _WELCOME = (
 )
 
 _HOW_TO_INVESTIGATE = (
-    "How to investigate:\n"
-    "• Type 1, 2, 3… to examine a piece of evidence\n"
-    "• Or type any question about the case freely\n\n"
-    "Use the buttons below when you're ready to act."
+    "🔍 Investigate: type a number to examine evidence, or ask any question about the case.\n"
+    "⚖️ When ready to act: use the buttons below."
 )
 
 _SCORE_LINES: dict[Score, str] = {
