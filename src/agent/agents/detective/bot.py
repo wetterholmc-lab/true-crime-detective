@@ -209,6 +209,37 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
+async def _send_evidence_photo(
+    update: Update,
+    case_id: int,
+    label: str,
+    item: case_store.EvidenceItem,  # type: ignore[name-defined]
+    image_ref: str,
+) -> None:
+    """Send an evidence photo, upgrading any cached temp URL to a Telegram file_id.
+
+    If the ref is a fal.ai temp URL that has expired, regenerates the image and
+    retries once. Silently skips the photo if both attempts fail (text follows).
+    """
+    if update.message is None:
+        return
+    try:
+        msg = await update.message.reply_photo(image_ref, caption=f"📁 {label}")
+    except Exception:
+        # Temp URL likely expired — regenerate and retry once.
+        logger.info("Cached image ref failed for {}; regenerating", item.id)
+        fresh = await evidence_image_store.generate_image(item)
+        if not fresh:
+            return
+        try:
+            msg = await update.message.reply_photo(fresh, caption=f"📁 {label}")
+        except Exception:
+            return  # give up; text description follows
+    # Always upgrade the stored ref to the permanent Telegram file_id.
+    if msg.photo:
+        await evidence_image_store.store_image_ref(case_id, item.id, msg.photo[-1].file_id)
+
+
 async def _do_examine(
     update: Update,
     session: session_store.Session,  # type: ignore[name-defined]
@@ -246,12 +277,7 @@ async def _do_examine(
     await session_store.touch_session(session.id)
 
     if image_ref:
-        msg = await update.message.reply_photo(image_ref, caption=f"📁 {item.label}")
-        # After first send, Telegram gives us a permanent file_id — cache it.
-        if not cached_ref and msg.photo:
-            await evidence_image_store.store_image_ref(
-                session.case_id, item.id, msg.photo[-1].file_id
-            )
+        await _send_evidence_photo(update, session.case_id, item.label, item, image_ref)
         await update.message.reply_text(description)
     else:
         await update.message.reply_text(f"📁 EVIDENCE: {item.label}\n\n{description}")

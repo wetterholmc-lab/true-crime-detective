@@ -33,17 +33,22 @@ async def get_image_ref(case_id: int, evidence_id: str) -> str | None:
     return str(row["image_url"]) if row else None
 
 
-async def store_image_ref(case_id: int, evidence_id: str, file_id: str) -> None:
-    """Cache a Telegram file_id for this evidence item."""
+async def store_image_ref(case_id: int, evidence_id: str, ref: str) -> None:
+    """Store (or upgrade) the image reference for this evidence item.
+
+    Accepts either a fal.ai temp URL (stored initially) or a Telegram file_id
+    (stored after first successful send). Always overwrites so temp URLs are
+    replaced with permanent file_ids as soon as a player examines the item.
+    """
     await db.execute(
         """
         INSERT INTO detective_evidence_images (case_id, evidence_id, image_url)
         VALUES ($1, $2, $3)
-        ON CONFLICT DO NOTHING
+        ON CONFLICT (case_id, evidence_id) DO UPDATE SET image_url = EXCLUDED.image_url
         """,
         case_id,
         evidence_id,
-        file_id,
+        ref,
     )
 
 
