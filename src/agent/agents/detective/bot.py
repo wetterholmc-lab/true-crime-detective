@@ -16,11 +16,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from loguru import logger
-from telegram import BotCommand, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -62,6 +63,13 @@ _WELCOME = (
     "Let me find your first case..."
 )
 
+_HOW_TO_INVESTIGATE = (
+    "How to investigate:\n"
+    "• Type 1, 2, 3… to examine a piece of evidence\n"
+    "• Or type any question about the case freely\n\n"
+    "Use the buttons below when you're ready to act."
+)
+
 _SCORE_LINES: dict[Score, str] = {
     Score.CORRECT: "✅ Correct — right person, right verdict.",
     Score.WRONG_VERDICT: "⚠️ Right suspect, wrong verdict.",
@@ -81,6 +89,19 @@ def _require_token() -> str:
     return token
 
 
+def _action_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚖️ Accuse", callback_data="accuse"),
+            InlineKeyboardButton("🕵️ Hint", callback_data="hint"),
+        ],
+        [
+            InlineKeyboardButton("📁 Close case", callback_data="close"),
+            InlineKeyboardButton("🗂 My record", callback_data="record"),
+        ],
+    ])
+
+
 def _case_brief_text(case: case_store.CaseRecord) -> str:  # type: ignore[name-defined]
     return (
         f"🔎 A new case has crossed your desk, Detective.\n\n"
@@ -88,14 +109,12 @@ def _case_brief_text(case: case_store.CaseRecord) -> str:  # type: ignore[name-d
         f"{case.court}, {case.year}\n\n"
         f"{case.brief}\n\n"
         f"Evidence on file:\n{_evidence_lines(case)}\n\n"
-        f"Type a number to examine evidence, or ask a question freely.\n"
-        f"/accuse · /hint · /close · /record"
+        f"{_HOW_TO_INVESTIGATE}"
     )
 
 
-async def _next_case_text(telegram_id: int) -> str:
-    """Return the brief for the next unplayed case, or an empty-file message."""
-
+async def _next_case_text(telegram_id: int) -> tuple[str, bool]:
+    """Return (text, has_case). has_case=True means the action keyboard should be shown."""
     case = await case_store.get_next_case(telegram_id)
     if case is None:
         record = await player_store.get_player_record(telegram_id)
@@ -104,10 +123,11 @@ async def _next_case_text(telegram_id: int) -> str:
             "🗂 You've cleared the case file, Detective.\n\n"
             f"Cases investigated: {record.cases_attempted}\n"
             f"Correct verdicts: {record.cases_correct}/{record.cases_attempted} ({pct}%)\n\n"
-            "No new cases are loaded yet. Check back soon."
+            "No new cases are loaded yet. Check back soon.",
+            False,
         )
     await session_store.open_session(telegram_id, case.id)
-    return _case_brief_text(case)
+    return _case_brief_text(case), True
 
 
 def _pct(correct: int, attempted: int) -> int:
@@ -176,13 +196,15 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"Welcome back, Detective. You're mid-case:\n\n"
             f"{case.title}\n\n"
             f"Evidence on file:\n{_evidence_lines(case)}\n\n"
-            f"Type a number to examine evidence, or ask a question freely.\n"
-            f"/accuse · /hint · /close · /record"
+            f"{_HOW_TO_INVESTIGATE}",
+            reply_markup=_action_keyboard(),
         )
     else:
         await update.message.reply_text(_WELCOME)
-        next_text = await _next_case_text(user.id)
-        await update.message.reply_text(next_text)
+        text, has_case = await _next_case_text(user.id)
+        await update.message.reply_text(
+            text, reply_markup=_action_keyboard() if has_case else None
+        )
 
 
 async def _do_examine(
@@ -278,7 +300,7 @@ async def handle_hint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     await session_store.increment_hint_count(session.id)
     new_count = session.hint_count + 1
-    closing = "\n\nThat was your last hint. /accuse when ready." if new_count >= 3 else ""
+    closing = "\n\nThat was your last hint. Tap Accuse when ready." if new_count >= 3 else ""
     await update.message.reply_text(f"🕵️ A nudge, Detective:\n\n{hint}{closing}")
 
 
@@ -330,8 +352,79 @@ async def handle_newcase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if session:
         await session_store.close_session(session.id, SessionStatus.ABANDONED)
         await player_store.record_outcome(user.id, None)
-    next_text = await _next_case_text(user.id)
-    await update.message.reply_text(next_text)
+    text, has_case = await _next_case_text(user.id)
+    await update.message.reply_text(text, reply_markup=_action_keyboard() if has_case else None)
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle taps on the inline action buttons (accuse / hint / close / record)."""
+    query = update.callback_query
+    user = update.effective_user
+    chat = update.effective_chat
+    if query is None or user is None or chat is None:
+        return
+    await query.answer()  # dismiss the button's loading indicator
+
+    action = query.data
+
+    if not await _authed(user.id):
+        await context.bot.send_message(chat.id, "🔒 Enter the password first.")
+        return
+
+    if action == "record":
+        record = await player_store.get_player_record(user.id)
+        pct = _pct(record.cases_correct, record.cases_attempted)
+        await context.bot.send_message(
+            chat.id,
+            f"🗂 YOUR DETECTIVE RECORD\n\n"
+            f"Cases investigated: {record.cases_attempted}\n"
+            f"Correct ✅: {record.cases_correct}\n"
+            f"Wrong verdict ⚠️: {record.cases_wrong_verdict}\n"
+            f"Wrong suspect ❌: {record.cases_wrong_person}\n"
+            f"Abandoned: {record.cases_abandoned}\n"
+            f"Accuracy: {pct}%",
+        )
+        return
+
+    session = await session_store.get_active_session(user.id)
+    if session is None:
+        await context.bot.send_message(chat.id, "No active case. Send /start to begin.")
+        return
+
+    if action == "accuse":
+        await session_store.set_pending_accusation(session.id, True)
+        await context.bot.send_message(
+            chat.id,
+            "⚖️ State your accusation, Detective.\n\n"
+            "Who do you believe is responsible, and is your verdict Guilty or Not Guilty?\n\n"
+            'Example: "I accuse Franz Müller. Guilty."',
+        )
+
+    elif action == "hint":
+        if session.hint_count >= 3:
+            await context.bot.send_message(
+                chat.id,
+                "You've used all 3 hints for this case, Detective.\n"
+                "Tap Accuse, or close the case to see the verdict.",
+            )
+            return
+        await context.bot.send_chat_action(chat.id, ChatAction.TYPING)
+        case = await case_store.get_case(session.case_id)
+        unexamined = [e for e in case.evidence if e.id not in session.clues_examined]
+        focus = unexamined[0] if unexamined else case.evidence[0]
+        query_emb = await embed_one(f"{focus.label} {focus.summary}")
+        chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=3)
+        hint = await game_master.generate_hint(case, chunks, session.clues_examined)
+        await session_store.increment_hint_count(session.id)
+        new_count = session.hint_count + 1
+        closing = "\n\nThat was your last hint. Tap Accuse when ready." if new_count >= 3 else ""
+        await context.bot.send_message(chat.id, f"🕵️ A nudge, Detective:\n\n{hint}{closing}")
+
+    elif action == "close":
+        case = await case_store.get_case(session.case_id)
+        await session_store.close_session(session.id, SessionStatus.ABANDONED)
+        reveal = await _build_reveal(user.id, case, None, None, None)
+        await context.bot.send_message(chat.id, reveal)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -348,8 +441,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await player_store.set_authenticated(user.id)
             await player_store.get_or_create_player(user.id)
             await update.message.reply_text("✅ Access granted, Detective.")
-            next_text = await _next_case_text(user.id)
-            await update.message.reply_text(next_text)
+            next_text, has_case = await _next_case_text(user.id)
+            await update.message.reply_text(
+                next_text, reply_markup=_action_keyboard() if has_case else None
+            )
         else:
             await update.message.reply_text("Wrong password. Try again:")
         return
@@ -359,8 +454,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if session is None:
         await player_store.get_or_create_player(user.id)
         await update.message.reply_text(_WELCOME)
-        next_text = await _next_case_text(user.id)
-        await update.message.reply_text(next_text)
+        next_text, has_case = await _next_case_text(user.id)
+        await update.message.reply_text(
+            next_text, reply_markup=_action_keyboard() if has_case else None
+        )
         return
 
     if session.pending_accusation:
@@ -398,7 +495,7 @@ async def _process_accusation(
     if extract is None:
         await update.message.reply_text(
             "I didn't catch that, Detective. "
-            'Try: "I accuse [Name]. Guilty." — or /accuse to try again.'
+            'Try: "I accuse [Name]. Guilty." — or tap Accuse to try again.'
         )
         return
 
@@ -437,6 +534,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("close", handle_close))
     app.add_handler(CommandHandler("record", handle_record))
     app.add_handler(CommandHandler("newcase", handle_newcase))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     return app
 

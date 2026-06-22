@@ -550,3 +550,76 @@ All 44 tests pass. ruff clean. pyright 0 errors.
 **What's next (Stage 7):** The code is all there. Next real step is to ingest an actual Old Bailey
 transcript (`uv run detective-ingest --file transcript.txt --slug <slug>`) and run the bot
 locally (`uv run detective`) to test the game end-to-end. Then deploy to Railway.
+
+## 2026-06-20 17:00 — Ingested Franz Müller (1864) — first real case live
+
+Got the actual Old Bailey Online transcript for Franz Müller (t18641024, ~29,500 words).
+The LLM extraction (smart tier) produced excellent structured data: gripping brief,
+8 cast members including Detective Tanner who chased Müller to New York, 8 evidence items
+covering the watch, chain, cut-down hat, and bloodstained carriage No. 69. Aftermath
+mentions "Müller's lights" — the real historical consequence (viewing apertures added to
+railway carriages). 85 chunks embedded and stored to pgvector.
+
+## 2026-06-20 18:00 — Ingested Adelaide Bartlett (1886) — second case, NOT GUILTY verdict
+
+56,000-word transcript, nearly twice the Müller case. The LLM found the central riddle
+precisely: "how could a fatal dose of fiery, burning chloroform have reached a man's
+stomach without leaving a single trace?" George Dyson (the minister) appears as co-accused.
+161 chunks. Verdict: not_guilty — players who are certain she did it get WRONG_VERDICT, not
+WRONG_PERSON. The Sir James Paget quote made it into the aftermath_text.
+
+## 2026-06-20 22:00 — Several bugs found and fixed during live play
+
+**jsonb decoding bug (hit twice):** asyncpg's type-codec registration via `init=_init_conn`
+isn't reliable through Neon's pgbouncer proxy. Fixed with a defensive `_j()` helper in
+`case_store._row_to_case` and `session_store._row_to_session` that calls `json.loads()` if
+the value is a string. The `db.py` init callback is kept as a best-effort layer.
+
+**Accusation flow UX:** after accusing, the verdict reveal and the next case dropped as two
+consecutive messages — no time to read. Fixed: removed `_next_case_text` from the reveal
+flow entirely. Now the reveal ends with "When you're ready: /newcase". Players advance on
+their own terms.
+
+**Evidence UX:** `[1]` in the evidence list looked like something you'd press. Changed to
+`1.` format, updated footer to "Type a number to examine evidence", and wired bare numbers
+in `handle_message` to `_do_examine` so typing `1` works exactly like `/examine 1`.
+
+**Password gate:** Added `TELEGRAM_BOT_PASSWORD` support. Unauthenticated users hit a lock
+prompt on any message or command. Correct password marks them authenticated once in the DB
+(`detective_players.authenticated`). Migration 009 adds the column.
+
+## 2026-06-21 00:00 — Deployed to Railway (Stage 8)
+
+Created new Railway project `true-crime-detective`. Production runs the FastAPI webhook app
+(`src/agent/agents/detective/app.py`) — same code as polling, different entrypoint. Updated
+`railway.toml` accordingly. Set all environment variables via CLI: ENVIRONMENT=production,
+DATABASE_URL (same Neon instance, prefixed tables keep separation), OPENROUTER_API_KEY,
+TELEGRAM_BOT_PASSWORD, generated TELEGRAM_WEBHOOK_SECRET and CRON_SECRET, PUBLIC_URL.
+
+The app registers the webhook with Telegram on startup via `lifespan`. Migrations run on
+startup too. Both cases (Müller, Bartlett) are confirmed in the production database.
+
+Pending: prod TELEGRAM_BOT_TOKEN needs to be set via `railway variables --set` (kept out
+of chat for security). Once set, Railway redeploys and webhook registers automatically.
+
+**What's next:** Ingest Kate Webster and/or Israel Lipski for a third case. Consider
+deploying a Railway Cron service for the `/cron/nudge` endpoint (hints for stale sessions).
+
+## 2026-06-22 11:00 — Ingested 5 new cases; added inline keyboard buttons
+Ingested all 5 suggested cases via `detective-ingest --url`:
+- pearcey-1890 (t18901124-43) — 51 chunks, guilty
+- cream-1892 (t18921017-962) — 78 chunks, guilty
+- chapman-1903 (t19030309-318) — 86 chunks, guilty
+- wood-1907 (t19071210-29) — 107 chunks, not guilty (Camden Town murder, acquitted)
+- seddon-1912 (t19120227-48) — 132 chunks, guilty
+
+Finding case numbers for post-1900 Old Bailey sessions required probing URL ranges
+(t{date}-{n}) since those sessions don't print case numbers in the running text. Surrey
+cases within a session continue the same numbering (Cream = 962, after Middlesex cases
+1–961 in t18921017).
+
+Replaced the `/accuse · /hint · /close · /record` footer with a proper Telegram inline
+keyboard (2×2 grid). Case briefs now explain how to investigate ("type a number or ask
+a question") and show four tappable buttons: Accuse, Hint, Close case, My record.
+`_next_case_text` now returns `(text, bool)` so callers know whether to attach the
+keyboard. Callback dispatch lives in `handle_callback` with `CallbackQueryHandler`.
