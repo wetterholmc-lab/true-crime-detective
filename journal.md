@@ -623,3 +623,37 @@ keyboard (2×2 grid). Case briefs now explain how to investigate ("type a number
 a question") and show four tappable buttons: Accuse, Hint, Close case, My record.
 `_next_case_text` now returns `(text, bool)` so callers know whether to attach the
 keyboard. Callback dispatch lives in `handle_callback` with `CallbackQueryHandler`.
+
+## 2026-06-22 11:30 — Evidence illustrations via fal.ai + Telegram file_id cache
+
+Added Victorian-era evidence illustrations that appear when a player examines an item.
+
+**Design:** On first examine, a Victorian newspaper engraving is generated via
+`fal-ai/flux/schnell` in parallel with the LLM description (`asyncio.gather`) — so the
+latency is max(image, LLM) not the sum. After Telegram receives the photo it returns a
+permanent file_id, which we store in the new `detective_evidence_images` table. Every
+subsequent examine by any player uses the cached file_id — instant and free.
+
+**New files:**
+- `migrations/010_detective_evidence_images.sql` — (case_id, evidence_id, image_url) cache
+- `src/agent/agents/detective/evidence_image_store.py` — get/store/generate; store uses
+  `ON CONFLICT DO UPDATE` so temp fal URLs are always upgraded to permanent Telegram file_ids
+- `src/agent/agents/detective/image_generator.py` — CLI to check cache coverage:
+  `uv run detective-generate-images [--slug <slug>] [--generate]`
+
+**Bot changes:** `_do_examine` now checks the cache first, then runs image + description
+in parallel on a miss. `_send_evidence_photo` wraps the send with one auto-regenerate retry
+if the cached URL has expired, then silently falls back to text-only.
+
+**No R2 needed:** R2 credentials were invalid locally. We avoid the dependency entirely by
+using Telegram as the CDN — its file_ids are permanent and freely reusable.
+
+**Prompt iteration:** Getting the cut-down hat (muller-1864/e6) right took several attempts.
+The key challenge: diffusion models have a strong prior for "normal top hat" and resist
+instructions like "cut down" or "half height". The prompt that worked best emphasised
+the outcome visually ("crown height less than half the brim diameter", "rough uneven cut
+edges visible around the rim") and used `flux/schnell`. The approved image is pre-seeded
+in the DB for e6. All other items generate on first examine.
+
+**Production fix:** `FAL_KEY` was missing from Railway variables — images silently failed
+with "FAL_KEY is not set". Fixed with `railway variables --set FAL_KEY=...` + redeploy.
