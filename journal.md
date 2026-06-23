@@ -674,3 +674,11 @@ an active session, so players can go straight back to investigating.
 **Sharing:** Bot is live at @true_crime_detective_bot (t.me/true_crime_detective_bot).
 Telegram shows a Start button automatically when opening a fresh bot link — no typing
 /start required. Password still gates entry.
+
+## 2026-06-23 07:30 — "Consulting the case files…" loading message
+
+Replaced the invisible typing indicator with a real placeholder message that appears
+immediately when the player sends input, then is deleted once the response is ready.
+Covers all slow operations: evidence examine (image + description), free-form questions,
+and hint generation — both via text input and button taps. `placeholder.delete()` runs
+just before sending the real response so there's no overlap.
