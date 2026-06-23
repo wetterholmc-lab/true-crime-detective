@@ -249,7 +249,8 @@ async def _do_examine(
     item = await case_store.get_evidence_item(session.case_id, ref)
     if item is None:
         await update.message.reply_text(
-            "That item isn't in the evidence list. Type a number from 1 to examine evidence."
+            "That item isn't in the evidence list. Type a number from 1 to examine evidence.",
+            reply_markup=_action_keyboard(),
         )
         return
     await update.message.chat.send_action(ChatAction.TYPING)
@@ -276,9 +277,11 @@ async def _do_examine(
 
     if image_ref:
         await _send_evidence_photo(update, session.case_id, item.label, item, image_ref)
-        await update.message.reply_text(description)
+        await update.message.reply_text(description, reply_markup=_action_keyboard())
     else:
-        await update.message.reply_text(f"📁 EVIDENCE: {item.label}\n\n{description}")
+        await update.message.reply_text(
+            f"📁 EVIDENCE: {item.label}\n\n{description}", reply_markup=_action_keyboard()
+        )
 
 
 async def handle_examine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -294,7 +297,9 @@ async def handle_examine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     arg = " ".join(context.args or []).strip()
     if not arg:
-        await update.message.reply_text("Which item? Type a number, e.g. /examine 1")
+        await update.message.reply_text(
+            "Which item? Type a number, e.g. /examine 1", reply_markup=_action_keyboard()
+        )
         return
     ref: str | int = int(arg) if arg.isdigit() else arg
     await _do_examine(update, session, ref)
@@ -333,7 +338,8 @@ async def handle_hint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if session.hint_count >= 3:
         await update.message.reply_text(
             "You've used all 3 hints for this case, Detective.\n"
-            "Make your accusation with /accuse, or close the case with /close."
+            "Make your accusation with /accuse, or close the case with /close.",
+            reply_markup=_action_keyboard(),
         )
         return
 
@@ -349,7 +355,9 @@ async def handle_hint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await session_store.increment_hint_count(session.id)
     new_count = session.hint_count + 1
     closing = "\n\nThat was your last hint. Tap Accuse when ready." if new_count >= 3 else ""
-    await update.message.reply_text(f"🕵️ A nudge, Detective:\n\n{hint}{closing}")
+    await update.message.reply_text(
+        f"🕵️ A nudge, Detective:\n\n{hint}{closing}", reply_markup=_action_keyboard()
+    )
 
 
 async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -422,6 +430,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if action == "record":
         record = await player_store.get_player_record(user.id)
         pct = _pct(record.cases_correct, record.cases_attempted)
+        session_for_record = await session_store.get_active_session(user.id)
         await context.bot.send_message(
             chat.id,
             f"🗂 YOUR DETECTIVE RECORD\n\n"
@@ -431,6 +440,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"Wrong suspect ❌: {record.cases_wrong_person}\n"
             f"Abandoned: {record.cases_abandoned}\n"
             f"Accuracy: {pct}%",
+            reply_markup=_action_keyboard() if session_for_record else None,
         )
         return
 
@@ -454,6 +464,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 chat.id,
                 "You've used all 3 hints for this case, Detective.\n"
                 "Tap Accuse, or close the case to see the verdict.",
+                reply_markup=_action_keyboard(),
             )
             return
         await context.bot.send_chat_action(chat.id, ChatAction.TYPING)
@@ -466,7 +477,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await session_store.increment_hint_count(session.id)
         new_count = session.hint_count + 1
         closing = "\n\nThat was your last hint. Tap Accuse when ready." if new_count >= 3 else ""
-        await context.bot.send_message(chat.id, f"🕵️ A nudge, Detective:\n\n{hint}{closing}")
+        await context.bot.send_message(
+            chat.id,
+            f"🕵️ A nudge, Detective:\n\n{hint}{closing}",
+            reply_markup=_action_keyboard(),
+        )
 
     elif action == "close":
         case = await case_store.get_case(session.case_id)
@@ -524,7 +539,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=5)
     answer = await game_master.answer_question(case, chunks, text)
     await session_store.touch_session(session.id)
-    await update.message.reply_text(answer)
+    await update.message.reply_text(answer, reply_markup=_action_keyboard())
 
 
 async def _process_accusation(
@@ -543,7 +558,8 @@ async def _process_accusation(
     if extract is None:
         await update.message.reply_text(
             "I didn't catch that, Detective. "
-            'Try: "I accuse [Name]. Guilty." — or tap Accuse to try again.'
+            'Try: "I accuse [Name]. Guilty." — or tap Accuse to try again.',
+            reply_markup=_action_keyboard(),
         )
         return
 
