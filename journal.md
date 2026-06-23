@@ -657,3 +657,20 @@ in the DB for e6. All other items generate on first examine.
 
 **Production fix:** `FAL_KEY` was missing from Railway variables — images silently failed
 with "FAL_KEY is not set". Fixed with `railway variables --set FAL_KEY=...` + redeploy.
+
+## 2026-06-23 07:10 — UX polish: action buttons on every response + instruction copy
+
+**Inline keyboard now appears after every in-session bot response**, not just the case
+brief. Players always see the four action buttons (Accuse / Hint / Close case / My record)
+after examining evidence, asking a question, getting a hint, or a failed accusation parse.
+Only excluded: the accusation prompt (player needs to type next), verdict reveals (game
+over), and auth/error messages. The "My record" button also shows the keyboard if there's
+an active session, so players can go straight back to investigating.
+
+**Instruction copy tightened** to two lines with a clear two-mode split:
+> 🔍 Investigate: type a number to examine evidence, or ask any question about the case.
+> ⚖️ If you need more hints or are ready to accuse: use the buttons below.
+
+**Sharing:** Bot is live at @true_crime_detective_bot (t.me/true_crime_detective_bot).
+Telegram shows a Start button automatically when opening a fresh bot link — no typing
+/start required. Password still gates entry.
