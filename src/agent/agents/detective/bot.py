@@ -253,7 +253,7 @@ async def _do_examine(
             reply_markup=_action_keyboard(),
         )
         return
-    await update.message.chat.send_action(ChatAction.TYPING)
+    placeholder = await update.message.reply_text("🗂 Consulting the case files…")
     case = await case_store.get_case(session.case_id)
     query_emb = await embed_one(f"{item.label} {item.summary}")
     chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=3)
@@ -262,11 +262,9 @@ async def _do_examine(
     cached_ref = await evidence_image_store.get_image_ref(session.case_id, item.id)
 
     if cached_ref:
-        # Cache hit: use stored Telegram file_id + run description only.
         description = await game_master.answer_question(case, chunks, question)
         image_ref: str | None = cached_ref
     else:
-        # Cache miss: generate illustration and description in parallel.
         description, image_ref = await asyncio.gather(
             game_master.answer_question(case, chunks, question),
             evidence_image_store.generate_image(item),
@@ -274,6 +272,7 @@ async def _do_examine(
 
     await session_store.mark_evidence_examined(session.id, item.id)
     await session_store.touch_session(session.id)
+    await placeholder.delete()
 
     if image_ref:
         await _send_evidence_photo(update, session.case_id, item.label, item, image_ref)
@@ -343,7 +342,7 @@ async def handle_hint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-    await update.message.chat.send_action(ChatAction.TYPING)
+    placeholder = await update.message.reply_text("🗂 Consulting the case files…")
     case = await case_store.get_case(session.case_id)
     # Focus on unexamined evidence; fall back to first item
     unexamined = [e for e in case.evidence if e.id not in session.clues_examined]
@@ -355,6 +354,7 @@ async def handle_hint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await session_store.increment_hint_count(session.id)
     new_count = session.hint_count + 1
     closing = "\n\nThat was your last hint. Tap Accuse when ready." if new_count >= 3 else ""
+    await placeholder.delete()
     await update.message.reply_text(
         f"🕵️ A nudge, Detective:\n\n{hint}{closing}", reply_markup=_action_keyboard()
     )
@@ -467,7 +467,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 reply_markup=_action_keyboard(),
             )
             return
-        await context.bot.send_chat_action(chat.id, ChatAction.TYPING)
+        placeholder = await context.bot.send_message(chat.id, "🗂 Consulting the case files…")
         case = await case_store.get_case(session.case_id)
         unexamined = [e for e in case.evidence if e.id not in session.clues_examined]
         focus = unexamined[0] if unexamined else case.evidence[0]
@@ -477,6 +477,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await session_store.increment_hint_count(session.id)
         new_count = session.hint_count + 1
         closing = "\n\nThat was your last hint. Tap Accuse when ready." if new_count >= 3 else ""
+        await placeholder.delete()
         await context.bot.send_message(
             chat.id,
             f"🕵️ A nudge, Detective:\n\n{hint}{closing}",
@@ -533,12 +534,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # Free-form investigation question
-    await update.message.chat.send_action(ChatAction.TYPING)
+    placeholder = await update.message.reply_text("🗂 Consulting the case files…")
     case = await case_store.get_case(session.case_id)
     query_emb = await embed_one(text)
     chunks = await chunk_store.search_chunks(session.case_id, query_emb, k=5)
     answer = await game_master.answer_question(case, chunks, text)
     await session_store.touch_session(session.id)
+    await placeholder.delete()
     await update.message.reply_text(answer, reply_markup=_action_keyboard())
 
 
